@@ -44,15 +44,23 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                 </div>
 
                 <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
-                    <span>Radius (in &deg;):</span>
+                    <span>Radius:</span>
                     <input
+                        id="radius"
                         name="radius"
                         type="number"
-                        min="0.000001"
-                        step="0.000001"
-                        max="2.499999"
+                        min="0.1"
+                        step="0.1"
+                        max="222"
                         value='%RADIUS%'
                         class="flex-1 border border-green-500 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                    <select
+                        id="radius-unit"
+                        name="radius-unit"
+                        class="border border-green-500 bg-gray-900 px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                        <option value="km" %RADIUS_UNIT_KM%>km</option>
+                        <option value="mi" %RADIUS_UNIT_MI%>mi</option>
+                    </select>
                 </label>
 
                 <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
@@ -116,6 +124,26 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                     .then(r => r.text())
                     .then(html => document.getElementById('result').innerHTML = html);
             });
+
+            // cap the radius at ~2 degrees of scan box (222 km / 138 mi) to stay
+            // within OpenSky's rate-limit area, swapping the limit with the unit
+            const radiusInput = document.getElementById('radius');
+            const radiusUnit = document.getElementById('radius-unit');
+            const KM_PER_MILE = 1.609344;
+            function updateRadiusMax() {
+                radiusInput.max = radiusUnit.value === 'mi' ? '138' : '222';
+            }
+            radiusUnit.addEventListener('change', function() {
+                // the unit just flipped, so convert the displayed value to keep the
+                // real-world distance the same: -> mi means it was km, -> km means it was mi
+                const value = parseFloat(radiusInput.value);
+                if (!isNaN(value)) {
+                    const converted = radiusUnit.value === 'mi' ? value / KM_PER_MILE : value * KM_PER_MILE;
+                    radiusInput.value = Math.round(converted * 10) / 10;
+                }
+                updateRadiusMax();
+            });
+            updateRadiusMax();
         </script>
     </body>
 </html>
@@ -143,7 +171,10 @@ void ConfigurationWebServer::Initialise() {
         prefs.begin("config", true);
         const String latitude = prefs.getString("latitude", "");
         const String longitude = prefs.getString("longitude", "");
-        const String radius = prefs.getString("radius", "1.0");
+        const String radius = prefs.getString("radius", "100");
+        // isKey() probes without logging; a plain getString() on this not-yet-saved
+        // key spams "nvs_get_str ... NOT_FOUND" on every page load until first save
+        const String radiusUnit = prefs.isKey("radius-unit") ? prefs.getString("radius-unit", "km") : "km";
         const String openskyClientId = prefs.getString("opensky-id", "");
         String openskySecret = prefs.getString("opensky-secret", "");
         const String scanlineEnabled = prefs.getString("scanline", "true");
@@ -158,11 +189,13 @@ void ConfigurationWebServer::Initialise() {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
-            [latitude, longitude, radius, openskyClientId, openskySecret, scanlineEnabled, infoTextEnabled, triangleEnabled]
+            [latitude, longitude, radius, radiusUnit, openskyClientId, openskySecret, scanlineEnabled, infoTextEnabled, triangleEnabled]
             (const String& var) -> String {
                 if (var == "LATITUDE")       return latitude;
                 if (var == "LONGITUDE")      return longitude;
                 if (var == "RADIUS")         return radius;
+                if (var == "RADIUS_UNIT_KM") return radiusUnit == "mi" ? "" : "selected";
+                if (var == "RADIUS_UNIT_MI") return radiusUnit == "mi" ? "selected" : "";
                 if (var == "OPENSKY_ID")     return openskyClientId;
                 if (var == "OPENSKY_SECRET") return openskySecret;
                 if (var == "SCANLINE")       return scanlineEnabled == "true" ? "checked" : "";
@@ -194,6 +227,7 @@ void ConfigurationWebServer::Initialise() {
         TrySaveParam("latitude");
         TrySaveParam("longitude");
         TrySaveParam("radius");
+        TrySaveParam("radius-unit");
         TrySaveParam("opensky-id");
 
         const auto* param = request->getParam("opensky-secret", true);

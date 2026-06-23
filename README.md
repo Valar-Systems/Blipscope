@@ -174,7 +174,7 @@ Once connected to your network, the radar config is accessible at [http://micror
 Here you can set:
 
 - **Location** (latitude and longitude): the centre point of your radar
-- **Radar radius**: how wide the scan extends (in degrees, 2 degrees is the limit to avoid rate limiting)
+- **Radar radius**: how far the scan extends, in kilometres or miles (capped at ~222 km / 138 mi, i.e. a 2-degree scan box, to avoid rate limiting)
 - **Display options**: toggle visual elements
 - **OpenSky credentials**: your client ID and secret (if you've made an account - again, highly recommend!)
 

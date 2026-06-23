@@ -1,5 +1,8 @@
 #include "AircraftManager.h"
 
+#include <algorithm>
+#include <cmath>
+
 constexpr int SCREEN_SIZE = 240;
 constexpr int SCREEN_SIZE_DIV_2 = (SCREEN_SIZE / 2);
 
@@ -10,7 +13,26 @@ void AircraftManager::Initialise()
     // get centre point + radius
     lat = configServer.GetStoredString("latitude").toDouble();
     lon = configServer.GetStoredString("longitude").toDouble();
-    rad = configServer.GetStoredString("radius").toDouble();
+
+    // "radius" is stored as a real-world distance (km or mi). Convert it into
+    // separate latitude/longitude degree spans: 1 deg latitude is ~111 km
+    // everywhere, but 1 deg longitude is ~111 km * cos(latitude), so the box
+    // must be wider in degrees near the equator and narrower near the poles to
+    // stay square on the ground.
+    const double distance = configServer.GetStoredString("radius").toDouble();
+    const bool inMiles = configServer.GetStoredString("radius-unit") == "mi";
+    const double distanceKm = inMiles ? distance * 1.609344 : distance;
+
+    constexpr double KM_PER_DEGREE = 111.0;
+    constexpr double MAX_DEGREES = 2.0; // keep the OpenSky box within rate-limit area
+
+    double cosLat = std::cos(radians(lat));
+    if (cosLat < 0.01) cosLat = 0.01; // guard against div-by-zero near the poles
+
+    constexpr double MIN_DEGREES = 0.001; // ~111 m floor; keeps the projection from dividing by zero
+
+    radLat = std::min(std::max(distanceKm / KM_PER_DEGREE, MIN_DEGREES), MAX_DEGREES);
+    radLon = std::min(std::max(distanceKm / (KM_PER_DEGREE * cosLat), MIN_DEGREES), MAX_DEGREES);
 
     // configuration
     const String renderText = configServer.GetStoredString("infotext");
@@ -53,10 +75,12 @@ void AircraftManager::Update()
         HttpResult result = http.Get(
             "https://opensky-network.org/api/states/all",
             {
-              {"lamin", String(lat - rad)},
-              {"lamax", String(lat + rad)},
-              {"lomin", String(lon - rad)},
-              {"lomax", String(lon + rad)}
+              // 6 decimals (~0.1 m): String(double) defaults to only 2, which would
+              // quantize small km/mi radii into a coarse ~1 km box or collapse it
+              {"lamin", String(lat - radLat, 6)},
+              {"lamax", String(lat + radLat, 6)},
+              {"lomin", String(lon - radLon, 6)},
+              {"lomax", String(lon + radLon, 6)}
             },
             headers
         );
@@ -129,8 +153,8 @@ std::pair<int, int> AircraftManager::ProjectCoordinateToScreen(float predLat, fl
     const float dLon = predLon - lon;
     const float dLat = predLat - lat;
 
-    const float normLon = (dLon + rad) / (2.0f * rad);
-    const float normLat = (dLat + rad) / (2.0f * rad);
+    const float normLon = (dLon + radLon) / (2.0f * radLon);
+    const float normLat = (dLat + radLat) / (2.0f * radLat);
 
     const int x = static_cast<int>(normLon * SCREEN_SIZE);
     const int y = static_cast<int>(SCREEN_SIZE - (normLat * SCREEN_SIZE));

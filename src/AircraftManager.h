@@ -12,7 +12,8 @@ class AircraftManager
 private:
     double lat = 0.0;
     double lon = 0.0;
-    double rad = 0.2;
+    double radLat = 0.2; // latitude half-span of the scan box, in degrees
+    double radLon = 0.2; // longitude half-span of the scan box, in degrees
     std::map<String, TrackedAircraft> trackedAircraft;
 
     bool displayInfoText = true;

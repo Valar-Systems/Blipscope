@@ -10,6 +10,11 @@ constexpr int SCREEN_SIZE_DIV_2 = (SCREEN_SIZE / 2);
 constexpr int PHOTO_W = 150;
 constexpr int PHOTO_H = 100;
 
+// aircraft list-view layout, shared by the renderer and the row hit-test
+constexpr int LIST_ROW_TOP = 40;
+constexpr int LIST_ROW_H = 18;
+constexpr int LIST_ROWS = 9;
+
 #include <ArduinoJson.h>
 
 namespace {
@@ -197,19 +202,29 @@ void AircraftManager::Update()
 
 void AircraftManager::Draw(LGFX_Sprite& backbuffer)
 {
-    // detail view: show the selected aircraft's card, falling back to the radar
-    // if it has since dropped out of the feed
-    if (viewMode == ViewMode::Detail) {
+    // the detail card overlays whichever screen is active; fall back to it if the
+    // selected aircraft has since dropped out of the feed
+    if (inDetail) {
         auto it = trackedAircraft.find(selectedIcao);
         if (it != trackedAircraft.end()) {
             DrawDetailCard(backbuffer, it->second);
             return;
         }
-        viewMode = ViewMode::Radar;
-        selectedIcao = "";
+        inDetail = false;
         detailPage = 0;
     }
 
+    switch (screen) {
+        case Screen::List:  DrawList(backbuffer);  break;
+        case Screen::Stats: DrawStats(backbuffer); break;
+        case Screen::Radar:
+        default:            DrawRadar(backbuffer);  break;
+    }
+    DrawScreenIndicator(backbuffer);
+}
+
+void AircraftManager::DrawRadar(LGFX_Sprite& backbuffer)
+{
     DrawRadarCircles(backbuffer);
 
     // identify the "of interest" contacts to ring: nearest, highest, fastest
@@ -273,7 +288,144 @@ void AircraftManager::Draw(LGFX_Sprite& backbuffer)
             if (icao == highestIcao) highlight("HIGH");
             if (icao == fastestIcao) highlight("FAST");
         }
+
+        // pinned ("tracked") contact: white reticle + always-on callsign
+        if (icao == pinnedIcao) {
+            const uint32_t PIN = lgfx::color888(255, 255, 255);
+            backbuffer.drawCircle(x, y, 9, PIN);
+            backbuffer.drawCircle(x, y, 11, PIN);
+            String cs = tracked.state.callsign;
+            cs.trim();
+            if (cs.isEmpty()) { cs = icao; cs.toUpperCase(); }
+            backbuffer.setTextSize(1);
+            backbuffer.setTextColor(PIN);
+            backbuffer.drawString(cs, x - (int)backbuffer.textWidth(cs) / 2, y + 13);
+        }
     }
+}
+
+void AircraftManager::DrawList(LGFX_Sprite& backbuffer)
+{
+    constexpr int cx = SCREEN_SIZE_DIV_2;
+    backbuffer.setTextSize(1);
+
+    const std::vector<String> order = SortedAircraftByDistance();
+
+    // clamp the scroll offset to the available rows
+    const int maxScroll = std::max(0, (int)order.size() - LIST_ROWS);
+    if (listScroll > maxScroll) listScroll = maxScroll;
+    if (listScroll < 0) listScroll = 0;
+
+    auto centered = [&](const String& s, int y) {
+        backbuffer.drawString(s, cx - (int)backbuffer.textWidth(s) / 2, y);
+    };
+
+    backbuffer.setTextColor(lgfx::color888(0, 255, 0));
+    centered("AIRCRAFT", 8);
+    backbuffer.setTextColor(lgfx::color888(0, 130, 0));
+    centered(String(order.size()) + " tracked", 23);
+
+    // rows: callsign / type / altitude, in fixed columns kept inside the bezel
+    backbuffer.setTextColor(lgfx::color888(0, 200, 0));
+    for (int r = 0; r < LIST_ROWS; ++r) {
+        const int idx = listScroll + r;
+        if (idx >= (int)order.size()) break;
+        auto it = trackedAircraft.find(order[idx]);
+        if (it == trackedAircraft.end()) continue;
+        const TrackedAircraft& t = it->second;
+
+        String cs = t.state.callsign;
+        cs.trim();
+        if (cs.isEmpty()) { cs = order[idx]; cs.toUpperCase(); }
+        const String type = t.typeCode.isEmpty() ? "--" : t.typeCode;
+        const String alt = String(lroundf(t.state.baroAltitude)) + "m";
+
+        const int y = LIST_ROW_TOP + r * LIST_ROW_H;
+        backbuffer.setTextColor(order[idx] == pinnedIcao ? lgfx::color888(255, 255, 255)
+                                                         : lgfx::color888(0, 200, 0));
+        backbuffer.drawString(cs, 40, y);
+        backbuffer.drawString(type, 120, y);
+        backbuffer.drawString(alt, 162, y);
+    }
+}
+
+void AircraftManager::DrawStats(LGFX_Sprite& backbuffer)
+{
+    constexpr int cx = SCREEN_SIZE_DIV_2;
+    backbuffer.setTextSize(1);
+
+    auto centered = [&](const String& s, int y) {
+        backbuffer.drawString(s, cx - (int)backbuffer.textWidth(s) / 2, y);
+    };
+
+    // snapshot over the airborne contacts
+    int count = 0;
+    String highIcao, fastIcao, nearIcao;
+    float maxAlt = -1e30f, maxVel = -1e30f, minD2 = 1e30f;
+    for (auto& [icao, t] : trackedAircraft) {
+        if (t.state.onGround) continue;
+        ++count;
+        if (t.state.baroAltitude > maxAlt) { maxAlt = t.state.baroAltitude; highIcao = icao; }
+        if (t.state.velocity > maxVel)     { maxVel = t.state.velocity; fastIcao = icao; }
+        auto [la, lo] = t.GetDisplayPosition();
+        const float dLa = la - (float)lat, dLo = lo - (float)lon;
+        const float d2 = dLa * dLa + dLo * dLo;
+        if (d2 < minD2) { minD2 = d2; nearIcao = icao; }
+    }
+
+    auto label = [&](const String& icao) -> String {
+        auto it = trackedAircraft.find(icao);
+        if (it == trackedAircraft.end()) return "-";
+        String cs = it->second.state.callsign;
+        cs.trim();
+        if (cs.isEmpty()) { cs = icao; cs.toUpperCase(); }
+        return cs;
+    };
+
+    backbuffer.setTextColor(lgfx::color888(0, 255, 0));
+    centered("STATS", 14);
+
+    int y = 48;
+    const int lh = backbuffer.fontHeight() + 10;
+    backbuffer.setTextColor(lgfx::color888(0, 200, 0));
+    auto line = [&](const String& s) { centered(s, y); y += lh; };
+
+    line(String(count) + " aircraft");
+    if (count > 0) {
+        line("High " + label(highIcao) + " " + String(lroundf(maxAlt)) + "m");
+        line("Fast " + label(fastIcao) + " " + String(lroundf(maxVel)) + "m/s");
+        float distance = sqrtf(minD2) * 111.0f;
+        if (rangeUnit == "mi") distance /= 1.609344f;
+        line("Near " + label(nearIcao) + " " + String(distance, distance < 10.0f ? 1 : 0) + rangeUnit);
+    }
+}
+
+void AircraftManager::DrawScreenIndicator(LGFX_Sprite& backbuffer) const
+{
+    constexpr int cx = SCREEN_SIZE_DIV_2;
+    const int y = SCREEN_SIZE - 16;
+    for (int i = 0; i < 3; ++i) {
+        const bool active = (i == (int)screen);
+        backbuffer.fillCircle(cx - 12 + i * 12, y, active ? 3 : 2,
+                              active ? lgfx::color888(0, 255, 0) : lgfx::color888(0, 80, 0));
+    }
+}
+
+std::vector<String> AircraftManager::SortedAircraftByDistance()
+{
+    std::vector<std::pair<float, String>> v;
+    for (auto& [icao, t] : trackedAircraft) {
+        if (t.state.onGround) continue;
+        auto [la, lo] = t.GetDisplayPosition();
+        const float dLa = la - (float)lat, dLo = lo - (float)lon;
+        v.push_back({ dLa * dLa + dLo * dLo, icao });
+    }
+    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+
+    std::vector<String> out;
+    out.reserve(v.size());
+    for (auto& p : v) out.push_back(p.second);
+    return out;
 }
 
 void AircraftManager::DrawRadarCircles(LGFX_Sprite& backbuffer) const
@@ -422,62 +574,106 @@ void AircraftManager::HandleTouch()
     int32_t tx = 0, ty = 0;
     const bool touched = tft.getTouch(&tx, &ty);
 
-    // act only on the press edge so a finger held down counts as a single tap
-    if (touched && !wasTouched)
-        HandleTap(tx, ty);
+    if (touched) {
+        if (!wasTouched) { touchStartX = tx; touchStartY = ty; } // press edge
+        touchLastX = tx;
+        touchLastY = ty;
+    } else if (wasTouched) {
+        // release: classify the stroke as a tap or a 4-way swipe from its delta
+        const int dx = touchLastX - touchStartX;
+        const int dy = touchLastY - touchStartY;
+        const int adx = abs(dx), ady = abs(dy);
+        constexpr int SWIPE_MIN = 40;
+
+        if (adx < SWIPE_MIN && ady < SWIPE_MIN)
+            HandleTap(touchStartX, touchStartY);
+        else if (adx >= ady)
+            HandleSwipe(dx > 0 ? Swipe::Right : Swipe::Left);
+        else
+            HandleSwipe(dy > 0 ? Swipe::Down : Swipe::Up);
+    }
 
     wasTouched = touched;
 }
 
 void AircraftManager::HandleTap(int tx, int ty)
 {
-    // in the detail view: if the photo card is showing, flip to the full-data
-    // page; otherwise (data page, or no photo) the tap closes the card
-    if (viewMode == ViewMode::Detail) {
+    // detail card: flip the photo page to the data page, else close
+    if (inDetail) {
         const bool hasPhoto = photoReady && photoIcao == selectedIcao && photoSprite.getBuffer() != nullptr;
-        if (hasPhoto && detailPage == 0) {
+        if (hasPhoto && detailPage == 0)
             detailPage = 1;
-        } else {
-            viewMode = ViewMode::Radar;
-            selectedIcao = "";
-            detailPage = 0;
-        }
+        else { inDetail = false; detailPage = 0; }
         return;
     }
 
-    // radar view: select the nearest airborne aircraft within the tap radius
-    constexpr int TAP_RADIUS = 20;
-    int bestDist2 = TAP_RADIUS * TAP_RADIUS;
-    String bestIcao = "";
-
-    for (auto& [icao, tracked] : trackedAircraft) {
-        if (tracked.state.onGround) continue;
-
-        auto [lat, lon] = tracked.GetDisplayPosition();
-        auto [x, y] = ProjectCoordinateToScreen(lat, lon);
-        const int dx = x - tx;
-        const int dy = y - ty;
-        const int dist2 = dx * dx + dy * dy;
-
-        if (dist2 <= bestDist2) {
-            bestDist2 = dist2;
-            bestIcao = icao;
+    if (screen == Screen::Radar) {
+        // select the nearest airborne aircraft within the tap radius
+        constexpr int TAP_RADIUS = 20;
+        int bestDist2 = TAP_RADIUS * TAP_RADIUS;
+        String bestIcao = "";
+        for (auto& [icao, tracked] : trackedAircraft) {
+            if (tracked.state.onGround) continue;
+            auto [la, lo] = tracked.GetDisplayPosition();
+            auto [x, y] = ProjectCoordinateToScreen(la, lo);
+            const int dx = x - tx, dy = y - ty;
+            const int dist2 = dx * dx + dy * dy;
+            if (dist2 <= bestDist2) { bestDist2 = dist2; bestIcao = icao; }
+        }
+        if (!bestIcao.isEmpty()) {
+            selectedIcao = bestIcao;
+            inDetail = true;
+            detailPage = 0;
+        } else {
+            pinnedIcao = ""; // tap on empty radar clears the pin
+        }
+    } else if (screen == Screen::List) {
+        // map the tapped row to an aircraft (same layout as DrawList)
+        if (ty >= LIST_ROW_TOP) {
+            const int r = (ty - LIST_ROW_TOP) / LIST_ROW_H;
+            if (r >= 0 && r < LIST_ROWS) {
+                const std::vector<String> order = SortedAircraftByDistance();
+                const int idx = listScroll + r;
+                if (idx >= 0 && idx < (int)order.size()) {
+                    selectedIcao = order[idx];
+                    inDetail = true;
+                    detailPage = 0;
+                }
+            }
         }
     }
+    // Stats screen: tap does nothing
+}
 
-    if (!bestIcao.isEmpty()) {
-        selectedIcao = bestIcao;
-        viewMode = ViewMode::Detail;
+void AircraftManager::HandleSwipe(Swipe swipe)
+{
+    // detail card: swipe up pins ("tracks") the aircraft and returns to the
+    // radar; any other swipe just closes the card
+    if (inDetail) {
+        if (swipe == Swipe::Up) {
+            pinnedIcao = (pinnedIcao == selectedIcao) ? "" : selectedIcao;
+            screen = Screen::Radar;
+        }
+        inDetail = false;
         detailPage = 0;
-        Serial.printf("[touch] tap (%d,%d) selected %s\n", tx, ty, bestIcao.c_str());
-    } else {
-        Serial.printf("[touch] tap (%d,%d) hit nothing\n", tx, ty);
+        return;
     }
+
+    // list view: vertical swipe scrolls
+    if (screen == Screen::List && (swipe == Swipe::Up || swipe == Swipe::Down)) {
+        listScroll += (swipe == Swipe::Up) ? LIST_ROWS - 1 : -(LIST_ROWS - 1);
+        if (listScroll < 0) listScroll = 0; // upper bound clamped in DrawList
+        return;
+    }
+
+    // horizontal swipe cycles the top-level screens (left = next, right = prev)
+    if (swipe == Swipe::Left)  screen = (Screen)(((int)screen + 1) % 3);
+    if (swipe == Swipe::Right) screen = (Screen)(((int)screen + 2) % 3);
 }
 
 void AircraftManager::ProcessDetailLookups()
 {
-    if (viewMode != ViewMode::Detail)
+    if (!inDetail)
         return;
 
     auto it = trackedAircraft.find(selectedIcao);
@@ -657,7 +853,8 @@ void AircraftManager::DrawDetailCard(LGFX_Sprite& backbuffer, const TrackedAircr
     }
 
     backbuffer.setTextColor(lgfx::color888(0, 110, 0));
-    centered(showPhoto ? "tap for details" : "tap to go back", SCREEN_SIZE - 34);
+    centered(pinnedIcao == selectedIcao ? "swipe up: unpin" : "swipe up: pin", SCREEN_SIZE - 46);
+    centered(showPhoto ? "tap: details" : "tap: back", SCREEN_SIZE - 34);
 }
 
 void AircraftManager::ProcessMetadataLookups()

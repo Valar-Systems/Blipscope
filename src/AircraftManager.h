@@ -26,13 +26,21 @@ private:
     bool displayAltColor = true;  // color aircraft markers by altitude band
     bool displayHighlight = true; // ring the nearest/highest/fastest contacts
 
-    // Tap-to-select view state. Radar is the normal scope; Detail shows a single
-    // aircraft's info card. selectedIcao is the trackedAircraft key being shown.
-    enum class ViewMode { Radar, Detail };
-    ViewMode viewMode = ViewMode::Radar;
-    String selectedIcao = "";
-    int detailPage = 0;      // 0 = photo card, 1 = full-data card (only when a photo exists)
-    bool wasTouched = false; // edge-detect so a held finger registers one tap
+    // Screen navigation. Three top-level screens cycle via horizontal swipe; the
+    // detail card overlays whichever screen you're on.
+    enum class Screen { Radar, List, Stats };
+    Screen screen = Screen::Radar;
+    bool inDetail = false;     // detail card shown over the current screen
+    String selectedIcao = "";  // aircraft shown in the detail card
+    String pinnedIcao = "";    // aircraft kept highlighted ("tracked") on the radar
+    int detailPage = 0;        // 0 = photo card, 1 = full-data card
+    int listScroll = 0;        // first visible row in the list view
+
+    // touch/gesture state: a release is classified as a tap or a 4-way swipe
+    bool wasTouched = false;
+    int touchStartX = 0, touchStartY = 0;
+    int touchLastX = 0, touchLastY = 0;
+    enum class Swipe { Up, Down, Left, Right };
 
     // Decoded aircraft photo for the detail view. The sprite is created once and
     // reused; photoIcao/photoReady track which aircraft it currently holds.
@@ -65,8 +73,15 @@ private:
     void DrawEmergencyAlert(LGFX_Sprite& backbuffer, int x, int y, const TrackedAircraft& tracked) const;
     void DrawDetailCard(LGFX_Sprite& backbuffer, const TrackedAircraft& tracked);
 
-    void HandleTouch();           // poll the touchscreen and act on a new tap
+    void DrawRadar(LGFX_Sprite& backbuffer);
+    void DrawList(LGFX_Sprite& backbuffer);
+    void DrawStats(LGFX_Sprite& backbuffer);
+    void DrawScreenIndicator(LGFX_Sprite& backbuffer) const;
+    std::vector<String> SortedAircraftByDistance();
+
+    void HandleTouch();             // poll the touch panel, classify tap vs swipe
     void HandleTap(int tx, int ty); // route a tap to selection / dismissal
+    void HandleSwipe(Swipe swipe);  // route a swipe to navigation / pin
 
     // Resolve the selected aircraft's metadata, route, then photo -- one blocking
     // lookup per frame so the detail card fills in progressively. Runs for the
@@ -91,5 +106,5 @@ public:
     void Initialise();
     void Update();
     void Draw(LGFX_Sprite& backbuffer);
-    bool IsDetailView() const { return viewMode == ViewMode::Detail; }
+    bool IsRadarView() const { return screen == Screen::Radar && !inDetail; }
 };

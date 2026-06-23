@@ -16,12 +16,15 @@ private:
     double lon = 0.0;
     double radLat = 0.2; // latitude half-span of the scan box, in degrees
     double radLon = 0.2; // longitude half-span of the scan box, in degrees
+    double rangeRadiusDisplay = 0.0; // outer ring distance in the user's unit, for range labels
+    String rangeUnit = "km";
     std::map<String, TrackedAircraft> trackedAircraft;
 
     bool displayInfoText = true;
     bool displayTriangles = true;
     bool displayTrails = true;
     bool displayAltColor = true;  // color aircraft markers by altitude band
+    bool displayHighlight = true; // ring the nearest/highest/fastest contacts
 
     // Tap-to-select view state. Radar is the normal scope; Detail shows a single
     // aircraft's info card. selectedIcao is the trackedAircraft key being shown.

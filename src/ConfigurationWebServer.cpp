@@ -113,7 +113,26 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                             %ALTCOLOR%
                             class="px-3 sm:px-1 accent-green-500">
                     </label>
+                    <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                        <span>Highlights:</span>
+                        <input
+                            name="highlight"
+                            type="checkbox"
+                            %HIGHLIGHT%
+                            class="px-3 sm:px-1 accent-green-500">
+                    </label>
                 </div>
+
+                <label class="flex flex-col sm:flex-row items-start sm:items-center gap-2">
+                    <span>Brightness:</span>
+                    <input
+                        name="brightness"
+                        type="range"
+                        min="10"
+                        max="255"
+                        value='%BRIGHTNESS%'
+                        class="flex-1 w-full accent-green-500">
+                </label>
 
                 <fieldset class="border border-green-500 p-3">
                     <legend class="px-2">
@@ -217,6 +236,8 @@ void ConfigurationWebServer::Initialise() {
         const String triangleEnabled = prefs.getString("triangle", "true");
         const String trailEnabled = prefs.getString("trail", "true");
         const String altColorEnabled = prefs.getString("altcolor", "true");
+        const String highlightEnabled = prefs.getString("highlight", "true");
+        const String brightness = prefs.getString("brightness", "255");
 
         // Build the per-field info checkboxes from the shared table so the form
         // always reflects exactly the fields the renderer knows how to draw.
@@ -243,7 +264,7 @@ void ConfigurationWebServer::Initialise() {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
-            [latitude, longitude, radius, radiusUnit, openskyClientId, openskySecret, scanlineEnabled, infoTextEnabled, triangleEnabled, trailEnabled, altColorEnabled, infoFieldsHtml]
+            [latitude, longitude, radius, radiusUnit, openskyClientId, openskySecret, scanlineEnabled, infoTextEnabled, triangleEnabled, trailEnabled, altColorEnabled, highlightEnabled, brightness, infoFieldsHtml]
             (const String& var) -> String {
                 if (var == "LATITUDE")       return latitude;
                 if (var == "LONGITUDE")      return longitude;
@@ -257,6 +278,8 @@ void ConfigurationWebServer::Initialise() {
                 if (var == "TRIANGLE")       return triangleEnabled == "true" ? "checked" : "";
                 if (var == "TRAIL")          return trailEnabled == "true" ? "checked" : "";
                 if (var == "ALTCOLOR")       return altColorEnabled == "true" ? "checked" : "";
+                if (var == "HIGHLIGHT")      return highlightEnabled == "true" ? "checked" : "";
+                if (var == "BRIGHTNESS")     return brightness;
                 if (var == "INFO_FIELDS")    return infoFieldsHtml;
                 return "";
             }
@@ -288,6 +311,7 @@ void ConfigurationWebServer::Initialise() {
         TrySaveParam("longitude");
         TrySaveParam("radius");
         TrySaveParam("radius-unit");
+        TrySaveParam("brightness");
         TrySaveParam("opensky-id");
 
         const auto* param = request->getParam("opensky-secret", true);
@@ -302,6 +326,7 @@ void ConfigurationWebServer::Initialise() {
         prefs.putString("triangle", request->hasParam("triangle", true) ? "true" : "false");
         prefs.putString("trail", request->hasParam("trail", true) ? "true" : "false");
         prefs.putString("altcolor", request->hasParam("altcolor", true) ? "true" : "false");
+        prefs.putString("highlight", request->hasParam("highlight", true) ? "true" : "false");
         prefs.putString("infotext", request->hasParam("infotext", true) ? "true" : "false");
 
         // an unchecked checkbox isn't sent in the form body, so hasParam() is the

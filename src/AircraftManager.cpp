@@ -60,15 +60,23 @@ void AircraftManager::Initialise()
     radLat = std::min(std::max(distanceKm / KM_PER_DEGREE, MIN_DEGREES), MAX_DEGREES);
     radLon = std::min(std::max(distanceKm / (KM_PER_DEGREE * cosLat), MIN_DEGREES), MAX_DEGREES);
 
+    // outer range-ring distance in the user's unit (derived from the clamped
+    // radLat so the labels match what's actually drawn), for the ring labels
+    rangeRadiusDisplay = radLat * KM_PER_DEGREE;
+    if (inMiles) rangeRadiusDisplay /= 1.609344;
+    rangeUnit = inMiles ? "mi" : "km";
+
     // configuration
     const String renderText = configServer.GetStoredString("infotext");
     const String renderTris = configServer.GetStoredString("triangle");
     const String renderTrail = configServer.GetStoredString("trail");
     const String renderAltColor = configServer.GetStoredString("altcolor");
+    const String renderHighlight = configServer.GetStoredString("highlight");
     if (!renderText.isEmpty()) displayInfoText = renderText == "true" ? true : false;
     if (!renderTris.isEmpty()) displayTriangles = renderTris == "true" ? true : false;
     if (!renderTrail.isEmpty()) displayTrails = renderTrail == "true" ? true : false;
     if (!renderAltColor.isEmpty()) displayAltColor = renderAltColor == "true" ? true : false;
+    if (!renderHighlight.isEmpty()) displayHighlight = renderHighlight == "true" ? true : false;
 
     // which individual info lines to show. An unset key (device never saved, or
     // an older save predating this field) falls back to the field's default.
@@ -95,6 +103,13 @@ void AircraftManager::Initialise()
         dailyRequestBudget = AUTHED_TOKENS_PER_DAY - TOKEN_BUFFER; // authed tokens minus buffer
 
     fetchInterval = MS_PER_DAY / dailyRequestBudget;
+
+    // backlight brightness (PWM). Default full; clamp away from 0 so the screen
+    // can't be saved completely dark.
+    const String brightnessStr = configServer.GetStoredString("brightness");
+    const uint8_t brightness = brightnessStr.isEmpty()
+        ? 255 : (uint8_t)constrain(brightnessStr.toInt(), 10, 255);
+    tft.setBrightness(brightness);
 
     // Force the next Update() to fetch immediately. On a config reload this means
     // a changed location/radius refreshes the radar right away rather than after
@@ -197,6 +212,21 @@ void AircraftManager::Draw(LGFX_Sprite& backbuffer)
 
     DrawRadarCircles(backbuffer);
 
+    // identify the "of interest" contacts to ring: nearest, highest, fastest
+    String nearestIcao, highestIcao, fastestIcao;
+    if (displayHighlight) {
+        float minDist2 = 1e30f, maxAlt = -1e30f, maxVel = -1e30f;
+        for (auto& [icao, t] : trackedAircraft) {
+            if (t.state.onGround) continue;
+            auto [la, lo] = t.GetDisplayPosition();
+            const float dLat = la - (float)lat, dLon = lo - (float)lon;
+            const float d2 = dLat * dLat + dLon * dLon;
+            if (d2 < minDist2)                 { minDist2 = d2; nearestIcao = icao; }
+            if (t.state.baroAltitude > maxAlt) { maxAlt = t.state.baroAltitude; highestIcao = icao; }
+            if (t.state.velocity > maxVel)     { maxVel = t.state.velocity; fastestIcao = icao; }
+        }
+    }
+
     for (auto& [icao, tracked] : trackedAircraft) {
         if (tracked.state.onGround) continue;
 
@@ -227,6 +257,22 @@ void AircraftManager::Draw(LGFX_Sprite& backbuffer)
             else
                 backbuffer.fillCircle(x, y, 3, markerColor);
         }
+
+        // ring the standout contacts; tags stack up-left to avoid the info text
+        if (displayHighlight) {
+            const uint32_t HL = lgfx::color888(255, 0, 255); // magenta: not an altitude or emergency color
+            int tagY = y - 4;
+            auto highlight = [&](const String& tag) {
+                backbuffer.drawCircle(x, y, 7, HL);
+                backbuffer.setTextSize(1);
+                backbuffer.setTextColor(HL);
+                backbuffer.drawString(tag, x - (int)backbuffer.textWidth(tag) - 9, tagY);
+                tagY -= 9;
+            };
+            if (icao == nearestIcao) highlight("NEAR");
+            if (icao == highestIcao) highlight("HIGH");
+            if (icao == fastestIcao) highlight("FAST");
+        }
     }
 }
 
@@ -238,6 +284,30 @@ void AircraftManager::DrawRadarCircles(LGFX_Sprite& backbuffer) const
     backbuffer.drawCircle(CENTRE, CENTRE, OUTER, lgfx::color888(0, 200, 0));
     backbuffer.drawCircle(CENTRE, CENTRE, (OUTER / 3) * 2, lgfx::color888(0, 64, 0));
     backbuffer.drawCircle(CENTRE, CENTRE, OUTER / 3, lgfx::color888(0, 32, 0));
+
+    backbuffer.setTextSize(1);
+
+    // range-ring distance labels, stacked just right of the vertical centre line
+    backbuffer.setTextColor(lgfx::color888(0, 110, 0));
+    const int ringPx[3] = { OUTER, (OUTER / 3) * 2, OUTER / 3 };
+    const float ringFrac[3] = { 1.0f, 2.0f / 3.0f, 1.0f / 3.0f };
+    const int inset[3] = { 14, 3, 3 }; // push the outer label down off the bezel/N
+    for (int i = 0; i < 3; ++i) {
+        const float value = rangeRadiusDisplay * ringFrac[i];
+        String label = String(value, value < 10.0f ? 1 : 0);
+        if (i == 0) label += rangeUnit; // unit on the outer ring only
+        backbuffer.drawString(label, CENTRE + 4, CENTRE - ringPx[i] + inset[i]);
+    }
+
+    // compass rose at the bezel
+    backbuffer.setTextColor(lgfx::color888(0, 150, 0));
+    auto compass = [&](const char* c, int x, int y) {
+        backbuffer.drawString(c, x - (int)backbuffer.textWidth(c) / 2, y);
+    };
+    compass("N", CENTRE, 2);
+    compass("S", CENTRE, SCREEN_SIZE - 10);
+    compass("E", SCREEN_SIZE - 8, CENTRE - 3);
+    compass("W", 7, CENTRE - 3);
 }
 
 std::pair<int, int> AircraftManager::ProjectCoordinateToScreen(float predLat, float predLon) const
@@ -561,11 +631,24 @@ void AircraftManager::DrawDetailCard(LGFX_Sprite& backbuffer, const TrackedAircr
     if (!tracked.routeOrigin.isEmpty() && !tracked.routeDest.isEmpty())
         line(tracked.routeOrigin + " -> " + tracked.routeDest);
     if (!tracked.typeCode.isEmpty())     line("Type: " + tracked.typeCode);
+    if (!showPhoto && !tracked.typeName.isEmpty()) line(tracked.typeName); // full model, data page only
     if (!tracked.operatorName.isEmpty()) line(tracked.operatorName);
 
     // the photo page hides the full telemetry for space; the data page (and
     // photo-less aircraft) show everything
     if (!showPhoto) {
+        // distance + bearing from the radar centre
+        auto [aLat, aLon] = tracked.GetDisplayPosition();
+        const float dLatKm = (aLat - (float)lat) * 111.0f;
+        const float dLonKm = (aLon - (float)lon) * 111.0f * cosf(radians((float)lat));
+        float distance = sqrtf(dLatKm * dLatKm + dLonKm * dLonKm);
+        if (rangeUnit == "mi") distance /= 1.609344f;
+        float bearing = degrees(atan2f(dLonKm, dLatKm));
+        if (bearing < 0.0f) bearing += 360.0f;
+        static const char* DIRS[8] = { "N", "NE", "E", "SE", "S", "SW", "W", "NW" };
+        const char* dir = DIRS[((int)roundf(bearing / 45.0f)) % 8];
+        line("Dist: " + String(distance, distance < 10.0f ? 1 : 0) + " " + rangeUnit + " " + dir);
+
         if (!tracked.registration.isEmpty()) line("Reg: " + tracked.registration);
         line("Alt: " + String(lroundf(s.baroAltitude)) + " m");
         line("Spd: " + String(lroundf(s.velocity)) + " m/s");
@@ -629,6 +712,7 @@ void AircraftManager::LookupAircraftMetadata(const String& icao24, TrackedAircra
     }
 
     tracked.typeCode     = aircraft["icao_type"].isNull()           ? "" : aircraft["icao_type"].as<String>();
+    tracked.typeName     = aircraft["type"].isNull()                ? "" : aircraft["type"].as<String>();
     tracked.operatorName = aircraft["registered_owner"].isNull()    ? "" : aircraft["registered_owner"].as<String>();
     tracked.registration = aircraft["registration"].isNull()        ? "" : aircraft["registration"].as<String>();
     tracked.photoUrl     = aircraft["url_photo_thumbnail"].isNull() ? "" : aircraft["url_photo_thumbnail"].as<String>();

@@ -34,8 +34,9 @@ void setup()
   // initialise LGFX + screen
   tft.init();
   tft.invertDisplay(true);
-  pinMode(3, OUTPUT);
-  digitalWrite(3, HIGH);
+  // drive the backlight via PWM (configured in LGFX.h) so it's dimmable; full
+  // brightness for the boot screen until AircraftManager applies the saved level
+  tft.setBrightness(255);
 
   backbuffer.setColorDepth(8);
   backbuffer.createSprite(SCREEN_SIZE, SCREEN_SIZE);

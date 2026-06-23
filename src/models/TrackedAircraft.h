@@ -20,7 +20,8 @@ struct TrackedAircraft {
     // aircraft adsbdb doesn't know), so it's never looked up again.
     enum class MetadataState : uint8_t { NotFetched, Fetched };
     MetadataState metadataState = MetadataState::NotFetched;
-    String typeCode = "";
+    String typeCode = "";    // adsbdb icao_type, e.g. "B738"
+    String typeName = "";    // adsbdb full model, e.g. "Boeing 737-800"
     String operatorName = "";
     String registration = "";
     String photoUrl = "";    // adsbdb url_photo_thumbnail; fetched/decoded on inspect

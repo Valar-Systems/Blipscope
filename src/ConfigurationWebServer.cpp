@@ -1,5 +1,6 @@
 #include "ConfigurationWebServer.h"
 #include <ESPmDNS.h>
+#include "DeviceIdentity.h"
 
 // HTML stored in flash
 // %PLACEHOLDER% tokens are substituted at serve time by the template processor
@@ -121,8 +122,16 @@ static const char CONFIG_HTML[] PROGMEM = R"(
 )";
 
 void ConfigurationWebServer::Initialise() {
-    // start mDNS and check result
-    if (!MDNS.begin("microradar")) {
+    // Create the "config" NVS namespace up front. Opening read-write creates it if
+    // missing, so the read-only reads here, in AircraftManager, and every frame in
+    // loop() stop logging "nvs_open failed: NOT_FOUND" before the user has ever saved
+    // settings. Reads still fall back to their defaults until the config page is used.
+    prefs.begin("config", false);
+    prefs.end();
+
+    // start mDNS with a per-device hostname (e.g. MicroRadar-A1B2C3.local)
+    // so multiple boards on the same network don't collide
+    if (!MDNS.begin(DeviceIdentity::Name().c_str())) {
         Serial.println("[WARN] Failed to start mDNS. Continuing without mDNS...");
     }
 
@@ -211,7 +220,10 @@ void ConfigurationWebServer::Initialise() {
 const String ConfigurationWebServer::GetStoredString(const char* key)
 {
     prefs.begin("config", true);
-    const String value = prefs.getString(key, "");
+    // isKey() probes without logging; calling getString() on a missing key would spam
+    // "nvs_get_str ... NOT_FOUND" on every call (e.g. every frame for "scanline") until
+    // the user first saves settings. Returns the same "" default as before when absent.
+    const String value = prefs.isKey(key) ? prefs.getString(key, "") : String();
     prefs.end();
     return value;
 }

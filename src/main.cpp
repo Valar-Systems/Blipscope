@@ -3,6 +3,7 @@
 #include <WiFiManager.h>
 
 #include "LGFX.h"
+#include "DeviceIdentity.h"
 #include "WiFiManagerHelpers.h"
 #include "ConfigurationWebServer.h"
 #include "HttpRequestManager.h"
@@ -28,7 +29,7 @@ AircraftManager aircraftManager(configServer, authHandler, http, tft);
 void setup()
 {
   Serial.begin(115200);
-  // delay(1000); // avoids immediate serial output being cut off - uncomment if needed
+  while (!Serial && millis() < 3000) { delay(10); } // wait up to 3s for the USB CDC host to open the port
 
   // initialise LGFX + screen
   tft.init();
@@ -44,8 +45,52 @@ void setup()
   tft.setTextColor(lgfx::color888(0, 255, 0));
   tft.drawCentreString("Connecting to WiFi...", SCREEN_SIZE / 2, SCREEN_SIZE / 2);
 
+  // Log every WiFi radio event so we can see exactly where a join fails.
+  // These fire on the WiFi event task even while autoConnect() blocks below.
+  WiFi.onEvent([](arduino_event_id_t event, arduino_event_info_t info) {
+    switch (event) {
+      case ARDUINO_EVENT_WIFI_STA_START:
+        // Re-apply the hostname the instant the STA interface starts -- before the DHCP
+        // request goes out -- so it's sent as DHCP option 12 and the router registers it.
+        // That's what lets Angry IP Scanner (and the router's device list) resolve the
+        // name; WiFiManager sets it too, but its mode-cycling applies it after DHCP, too
+        // late. This mirrors MiniSpeedCam's working mode->setHostname->begin ordering.
+        WiFi.setHostname(DeviceIdentity::Name().c_str());
+        // Full TX power (chip default) for best range. Both setters require a started STA,
+        // which is exactly what this event signals.
+        WiFi.setTxPower(WIFI_POWER_19_5dBm);
+        Serial.printf("[WiFi] STA started; hostname=%s, TX 19.5dBm\n", DeviceIdentity::Name().c_str());
+        break;
+      case ARDUINO_EVENT_WIFI_STA_CONNECTED:
+        Serial.printf("[WiFi] Associated with \"%s\", waiting for IP...\n", WiFi.SSID().c_str());
+        break;
+      case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+        Serial.printf("[WiFi] CONNECTED  IP=%s  RSSI=%d dBm\n",
+                      WiFi.localIP().toString().c_str(), WiFi.RSSI());
+        break;
+      case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+        const auto reason = (wifi_err_reason_t)info.wifi_sta_disconnected.reason;
+        Serial.printf("[WiFi] DISCONNECTED  reason=%d (%s)\n",
+                      reason, WiFi.disconnectReasonName(reason));
+        if (reason == WIFI_REASON_NO_AP_FOUND)
+          Serial.println("       SSID not found: check spelling/range. The ESP32-C3 is 2.4GHz-only and cannot see 5GHz networks.");
+        else if (reason == WIFI_REASON_AUTH_FAIL || reason == WIFI_REASON_4WAY_HANDSHAKE_TIMEOUT ||
+                 reason == WIFI_REASON_AUTH_EXPIRE)
+          Serial.println("       Auth/key mismatch: most likely a wrong password.");
+        else if (reason == WIFI_REASON_HANDSHAKE_TIMEOUT)
+          Serial.println("       Handshake frames lost (not a key mismatch): RF/power instability or weak signal. Try lower TX power / better supply.");
+        break;
+      }
+      default:
+        break;
+    }
+  });
+
   WiFiManagerHelpers::ConfigureWiFiManager(wm, tft);
-  wm.autoConnect(WiFiManagerHelpers::WiFiManagerName);
+
+  const bool connected = wm.autoConnect(WiFiManagerHelpers::WiFiManagerName().c_str());
+  Serial.printf("[WiFi] autoConnect() returned %s\n",
+                connected ? "true (connected)" : "false (portal timed out / not connected)");
 
   // begin background server for configuration
   configServer.Initialise();

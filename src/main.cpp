@@ -102,6 +102,13 @@ void setup()
 
 void loop()
 {
+  // Forget WiFi credentials and reboot into the setup portal when requested.
+  if (configServer.ConsumeWifiReset()) {
+    wm.resetSettings();
+    delay(200); // let the HTTP response flush before the reboot
+    ESP.restart();
+  }
+
   // Apply settings saved via the web UI without rebooting. Done here, on the
   // loop task, so all AircraftManager state changes stay on a single task
   // rather than racing the async web-server callback.

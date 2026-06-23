@@ -156,6 +156,12 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                         value="Save"
                         class="bg-green-500 text-black mt-4 px-4 py-3 text-lg sm:text-base sm:px-2 sm:py-0 self-start cursor-pointer">
 
+                    <button
+                        type="button"
+                        id="resetwifi"
+                        class="border border-red-500 text-red-500 mt-4 px-4 py-3 text-lg sm:text-base sm:px-2 sm:py-0 self-start cursor-pointer">
+                        Reset WiFi</button>
+
                         <div id="result" class="mt-4 px-1 sm:px-10"></div>
                 </div>
             </form>
@@ -165,6 +171,14 @@ static const char CONFIG_HTML[] PROGMEM = R"(
             document.getElementById('cfg').addEventListener('submit', function(e) {
                 e.preventDefault();
                 fetch(this.action, { method: 'POST', body: new FormData(this) })
+                    .then(r => r.text())
+                    .then(html => document.getElementById('result').innerHTML = html);
+            });
+
+            // Reset WiFi: erase saved credentials and reboot into the setup portal
+            document.getElementById('resetwifi').addEventListener('click', function() {
+                if (!confirm('Forget WiFi credentials and restart into setup mode? You will need to reconnect the device to a network.')) return;
+                fetch('/reset-wifi', { method: 'POST' })
                     .then(r => r.text())
                     .then(html => document.getElementById('result').innerHTML = html);
             });
@@ -345,6 +359,15 @@ void ConfigurationWebServer::Initialise() {
         }
     );
 
+    // Forget WiFi credentials and reboot into the WiFiManager setup portal. The
+    // response is sent first; the restart is deferred a moment so it can flush.
+    server.on("/reset-wifi", HTTP_POST, [&](AsyncWebServerRequest* request) {
+        Serial.println("[POST] Clearing WiFi credentials and restarting...");
+        request->send(200, "text/html", "WiFi cleared - restarting into setup mode. Reconnect to the device's setup network.");
+        wifiResetRequested = true;
+        }
+    );
+
     server.begin();
 }
 
@@ -353,6 +376,14 @@ bool ConfigurationWebServer::ConsumeConfigChanged()
     if (!configChanged)
         return false;
     configChanged = false;
+    return true;
+}
+
+bool ConfigurationWebServer::ConsumeWifiReset()
+{
+    if (!wifiResetRequested)
+        return false;
+    wifiResetRequested = false;
     return true;
 }
 

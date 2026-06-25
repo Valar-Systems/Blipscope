@@ -7,9 +7,7 @@
 
 #include "SpecialAircraft.h"
 #include "DeviceIdentity.h"
-
-constexpr int SCREEN_SIZE = 240;
-constexpr int SCREEN_SIZE_DIV_2 = (SCREEN_SIZE / 2);
+#include "Layout.h"
 
 // adsbdb thumbnails (airport-data.com) are a standard 150x100
 constexpr int PHOTO_W = 150;

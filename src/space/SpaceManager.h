@@ -10,6 +10,7 @@
 #include "BandCanvas.h"
 #include "SpaceTheme.h"
 #include "SpaceFeedClient.h"
+#include "SpaceLogbook.h"
 
 class Sgp4; // forward decl; the SGP4 propagator (Hopperpop lib) is held by pointer, defined in the .cpp
 
@@ -49,8 +50,8 @@ private:
     // feed has data. Later stages add more (DSN, Voyager, flares, ISS passes, ...).
     enum class Screen : uint8_t {
         Iss, IssPass, Launch, Kp, SolarWind, Scales, Flare, Aurora, Dsn, DeepSpace, Asteroid,
-        Humans, Moon, StarMap, Observing, Planets, Algol, Dso, Eclipse, Meteor, CosmicClock,
-        Splash, Clock, COUNT
+        Humans, Moon, StarMap, Observing, Planets, Algol, Dso, Orrery, JupMoons, LunarTer,
+        Eclipse, Meteor, CosmicClock, Logbook, Splash, Clock, COUNT
     };
 
     ConfigurationWebServer& configServer;
@@ -58,6 +59,7 @@ private:
     HttpRequestManager& http;
     LGFX& tft;
     SpaceFeedClient feed;
+    SpaceLogbook logbook;       // persistent tally of caught events + observing streak
 
     // ---- config-derived state (set in Initialise) ----
     space::Palette palette = space::PaletteDefault();
@@ -88,6 +90,7 @@ private:
     bool alertIss = false;                   // ISS visible pass overhead (SGP4)
     bool alertDsn = false;                   // reserved: needs the DSN feed (later stage)
     bool alertAsteroid = true;               // an asteroid passing inside ~1 lunar distance
+    bool chimeOnAlert = true;                // also chirp the speaker when an alert fires (HAS_AUDIO)
     // edge state so an alert fires once per event, not every frame (persists across config reloads)
     long alertLaunchT0 = 0;                  // t0 the fired-flags below refer to (reset when it changes)
     long lastLaunchSecs = 0;                 // previous T-minus seconds, for up->down crossing detection
@@ -113,6 +116,14 @@ private:
     bool wasTouched = false;
     int touchStartX = 0, touchStartY = 0;
     int touchLastX = 0, touchLastY = 0;
+
+    // ---- IMU shake-to-launch easter egg (HAS_IMU + HAS_AUDIO) ----
+    static constexpr unsigned long LAUNCH_ANIM_MS   = 5200; // total liftoff animation length (ms)
+    static constexpr unsigned long LAUNCH_IGNITE_MS = 3000; // countdown 3..2..1, then ignition at T-0
+    unsigned long launchAnimStartMs = 0;     // 0 = not playing; else when the liftoff animation began
+    unsigned long lastShakeMs = 0;           // debounce: ignore new shakes during/just after one
+    unsigned long lastImuPollMs = 0;         // throttle the IMU read
+    bool launchIgnited = false;              // one-shot ignition chime fired this animation
 
     // rotation helpers
     std::vector<Screen> BuildRotation() const;   // enabled screens that currently have data
@@ -143,9 +154,14 @@ private:
     void DrawPlanets(BandCanvas& c);
     void DrawAlgol(BandCanvas& c);
     void DrawDso(BandCanvas& c);
+    void DrawOrrery(BandCanvas& c);
+    void DrawJupMoons(BandCanvas& c);
+    void DrawLunarTer(BandCanvas& c);
     void DrawEclipse(BandCanvas& c);
     void DrawMeteor(BandCanvas& c);
     void DrawCosmicClock(BandCanvas& c);
+    void DrawLogbook(BandCanvas& c);
+    void DrawLaunchAnim(BandCanvas& c);      // shake-to-launch full-screen liftoff overlay
     void DrawSplash(BandCanvas& c);
     void DrawClock(BandCanvas& c);
 

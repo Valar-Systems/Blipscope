@@ -60,6 +60,109 @@ const OrbEl PLANETS[5] = {
     { 113.6634, 2.38980e-5,  2.4886, -1.081e-7,339.3939, 2.97661e-5, 9.554750, 0.055546, -9.499e-9, 316.9670, 0.0334442282 }, // Saturn
 };
 
+// Heliocentric ecliptic longitude/latitude (deg) + distance (AU) of a planet, with the main
+// Jupiter/Saturn perturbations. Shared by the geocentric RA/Dec path and the orrery.
+void planetHelio(int idx, double d, double& lonecl, double& latecl, double& r)
+{
+    const OrbEl& el = PLANETS[idx];
+    const double N = el.N0 + el.Nd * d;
+    const double i = el.i0 + el.id * d;
+    const double w = el.w0 + el.wd * d;
+    const double a = el.a;
+    const double e = el.e0 + el.ed * d;
+    const double M = norm360(el.M0 + el.Md * d);
+
+    double E = M + R2D * e * sind(M) * (1.0 + e * cosd(M));
+    for (int it = 0; it < 6; ++it) E = E - (E - R2D * e * sind(E) - M) / (1.0 - e * cosd(E));
+
+    const double xv = a * (cosd(E) - e);
+    const double yv = a * (sqrt(1.0 - e * e) * sind(E));
+    const double v = atan2d(yv, xv);
+    r = sqrt(xv * xv + yv * yv);
+
+    const double xh = r * (cosd(N) * cosd(v + w) - sind(N) * sind(v + w) * cosd(i));
+    const double yh = r * (sind(N) * cosd(v + w) + cosd(N) * sind(v + w) * cosd(i));
+    const double zh = r * (sind(v + w) * sind(i));
+    lonecl = norm360(atan2d(yh, xh));
+    latecl = atan2d(zh, sqrt(xh * xh + yh * yh));
+
+    if (idx == 3 || idx == 4) { // Jupiter / Saturn main perturbations
+        const double Mj = norm360(PLANETS[3].M0 + PLANETS[3].Md * d);
+        const double Msa = norm360(PLANETS[4].M0 + PLANETS[4].Md * d);
+        if (idx == 3) {
+            lonecl += -0.332 * sind(2 * Mj - 5 * Msa - 67.6);
+            lonecl += -0.056 * sind(2 * Mj - 2 * Msa + 21);
+            lonecl += +0.042 * sind(3 * Mj - 5 * Msa + 21);
+            lonecl += -0.036 * sind(Mj - 2 * Msa);
+            lonecl += +0.022 * cosd(Mj - Msa);
+            lonecl += +0.023 * sind(2 * Mj - 3 * Msa + 52);
+            lonecl += -0.016 * sind(Mj - 5 * Msa - 69);
+        } else {
+            lonecl += +0.812 * sind(2 * Mj - 5 * Msa - 67.6);
+            lonecl += -0.229 * cosd(2 * Mj - 4 * Msa - 2);
+            lonecl += +0.119 * sind(Mj - 2 * Msa - 3);
+            lonecl += +0.046 * sind(2 * Mj - 6 * Msa - 69);
+            lonecl += +0.014 * sind(Mj - 3 * Msa + 32);
+            latecl  += -0.020 * cosd(2 * Mj - 4 * Msa - 2);
+            latecl  += +0.018 * sind(2 * Mj - 6 * Msa - 49);
+        }
+        lonecl = norm360(lonecl);
+    }
+}
+
+// Moon geocentric ecliptic longitude/latitude (deg), ascending node, argument of latitude, the
+// Sun's longitude, and the illuminated fraction -- the shared guts of MoonRaDec + MoonLibration.
+void moonEcl(double d, double& lon, double& lat, double& node, double& Fout, double& sunLon, double& illum)
+{
+    node = norm360(125.1228 - 0.0529538083 * d);
+    const double i = 5.1454;
+    const double w = norm360(318.0634 + 0.1643573223 * d);
+    const double a = 60.2666;
+    const double e = 0.054900;
+    const double M = norm360(115.3654 + 13.0649929509 * d);
+
+    double E = M + R2D * e * sind(M) * (1.0 + e * cosd(M));
+    for (int it = 0; it < 2; ++it) E = E - (E - R2D * e * sind(E) - M) / (1.0 - e * cosd(E));
+
+    const double xv = a * (cosd(E) - e);
+    const double yv = a * (sqrt(1.0 - e * e) * sind(E));
+    const double v = atan2d(yv, xv);
+    const double r = sqrt(xv * xv + yv * yv);
+
+    const double xh = r * (cosd(node) * cosd(v + w) - sind(node) * sind(v + w) * cosd(i));
+    const double yh = r * (sind(node) * cosd(v + w) + cosd(node) * sind(v + w) * cosd(i));
+    const double zh = r * (sind(v + w) * sind(i));
+    lon = norm360(atan2d(yh, xh));
+    lat = atan2d(zh, sqrt(xh * xh + yh * yh));
+
+    double Ms, Ls, rs;
+    sunLon = SunLongitude(d, Ms, Ls, rs);
+    const double Lm = norm360(node + w + M);
+    const double Dm = Lm - Ls;
+    Fout = Lm - node;
+
+    lon += -1.274 * sind(M - 2 * Dm);
+    lon += +0.658 * sind(2 * Dm);
+    lon += -0.186 * sind(Ms);
+    lon += -0.059 * sind(2 * M - 2 * Dm);
+    lon += -0.057 * sind(M - 2 * Dm + Ms);
+    lon += +0.053 * sind(M + 2 * Dm);
+    lon += +0.046 * sind(2 * Dm - Ms);
+    lon += +0.041 * sind(M - Ms);
+    lon += -0.035 * sind(Dm);
+    lon += -0.031 * sind(M + Ms);
+    lon += -0.015 * sind(2 * Fout - 2 * Dm);
+    lon += +0.011 * sind(M - 4 * Dm);
+    lat += -0.173 * sind(Fout - 2 * Dm);
+    lat += -0.055 * sind(M - Fout - 2 * Dm);
+    lat += -0.046 * sind(M + Fout - 2 * Dm);
+    lat += +0.033 * sind(Fout + 2 * Dm);
+    lat += +0.017 * sind(2 * M + Fout);
+    lon = norm360(lon);
+
+    illum = (1.0 - cosd(lon - sunLon)) * 0.5;
+}
+
 } // namespace
 
 namespace space { namespace astro {
@@ -93,65 +196,8 @@ void SunRaDec(time_t utc, double& raDeg, double& decDeg)
 void MoonRaDec(time_t utc, double& raDeg, double& decDeg, double& illumFrac)
 {
     const double d = DayNumber(utc);
-
-    // Moon mean orbital elements (deg / Earth-radii).
-    const double N = norm360(125.1228 - 0.0529538083 * d);  // ascending node
-    const double i = 5.1454;                                 // inclination
-    const double w = norm360(318.0634 + 0.1643573223 * d);  // arg. of perigee
-    const double a = 60.2666;                                // mean distance (Earth radii)
-    const double e = 0.054900;                               // eccentricity
-    const double M = norm360(115.3654 + 13.0649929509 * d);  // mean anomaly
-
-    // Eccentric anomaly (iterate twice; lunar e is larger than the Sun's).
-    double E = M + R2D * e * sind(M) * (1.0 + e * cosd(M));
-    for (int it = 0; it < 2; ++it)
-        E = E - (E - R2D * e * sind(E) - M) / (1.0 - e * cosd(E));
-
-    // Position in the orbital plane.
-    const double xv = a * (cosd(E) - e);
-    const double yv = a * (sqrt(1.0 - e * e) * sind(E));
-    const double v = atan2d(yv, xv);          // true anomaly
-    const double r = sqrt(xv * xv + yv * yv); // distance (Earth radii)
-
-    // Geocentric ecliptic rectangular -> longitude/latitude.
-    const double xh = r * (cosd(N) * cosd(v + w) - sind(N) * sind(v + w) * cosd(i));
-    const double yh = r * (sind(N) * cosd(v + w) + cosd(N) * sind(v + w) * cosd(i));
-    const double zh = r * (sind(v + w) * sind(i));
-    double lon = norm360(atan2d(yh, xh));
-    double lat = atan2d(zh, sqrt(xh * xh + yh * yh));
-
-    // Perturbations need the Sun's + Moon's mean longitudes and the mean elongation/arg-of-latitude.
-    double Ms, Ls, rs;
-    const double sunLon = SunLongitude(d, Ms, Ls, rs);
-    const double Lm = norm360(N + w + M);   // Moon's mean longitude
-    const double Dm = Lm - Ls;              // mean elongation
-    const double F = Lm - N;                // argument of latitude
-
-    // Main longitude perturbations (deg).
-    lon += -1.274 * sind(M - 2 * Dm);          // evection
-    lon += +0.658 * sind(2 * Dm);              // variation
-    lon += -0.186 * sind(Ms);                  // yearly equation
-    lon += -0.059 * sind(2 * M - 2 * Dm);
-    lon += -0.057 * sind(M - 2 * Dm + Ms);
-    lon += +0.053 * sind(M + 2 * Dm);
-    lon += +0.046 * sind(2 * Dm - Ms);
-    lon += +0.041 * sind(M - Ms);
-    lon += -0.035 * sind(Dm);                  // parallactic equation
-    lon += -0.031 * sind(M + Ms);
-    lon += -0.015 * sind(2 * F - 2 * Dm);
-    lon += +0.011 * sind(M - 4 * Dm);
-    // Main latitude perturbations (deg).
-    lat += -0.173 * sind(F - 2 * Dm);
-    lat += -0.055 * sind(M - F - 2 * Dm);
-    lat += -0.046 * sind(M + F - 2 * Dm);
-    lat += +0.033 * sind(F + 2 * Dm);
-    lat += +0.017 * sind(2 * M + F);
-
-    lon = norm360(lon);
-
-    // Illuminated fraction from the Sun-Moon elongation in ecliptic longitude.
-    const double elong = lon - sunLon;
-    illumFrac = (1.0 - cosd(elong)) * 0.5;
+    double lon, lat, node, F, sunLon;
+    moonEcl(d, lon, lat, node, F, sunLon, illumFrac);
 
     // Ecliptic -> equatorial.
     const double ecl = Obliquity(d);
@@ -163,6 +209,29 @@ void MoonRaDec(time_t utc, double& raDeg, double& decDeg, double& illumFrac)
     const double ze = yg * sind(ecl) + zg * cosd(ecl);
     raDeg = norm360(atan2d(ye, xe));
     decDeg = atan2d(ze, sqrt(xe * xe + ye * ye));
+}
+
+void MoonLibration(time_t utc, double& libLonDeg, double& libLatDeg, double& colongDeg)
+{
+    const double d = DayNumber(utc);
+    double lon, lat, node, F, sunLon, illum;
+    moonEcl(d, lon, lat, node, F, sunLon, illum);
+
+    constexpr double I = 1.54242; // inclination of the lunar equator to the ecliptic
+
+    // Optical libration (Meeus 53.1): tilt of the Moon's mean sub-Earth point.
+    const double W = lon - node;
+    const double A = atan2d(sind(W) * cosd(lat) * cosd(I) - sind(lat) * sind(I), cosd(W) * cosd(lat));
+    libLonDeg = fmod(A - F + 540.0, 360.0) - 180.0;            // -180..180
+    libLatDeg = asind(-sind(W) * cosd(lat) * sind(I) - sind(lat) * cosd(I));
+
+    // Selenographic colongitude of the Sun: same geometry for the sub-solar point (Sun lat ~0),
+    // expressed as the longitude of the morning terminator.
+    const double W0 = sunLon - node;
+    const double A0 = atan2d(sind(W0) * cosd(I), cosd(W0));
+    const double l0 = A0 - F;                                   // sub-solar selenographic longitude
+    colongDeg = fmod(270.0 - l0, 360.0);                        // -> standard colongitude (verified vs pyephem)
+    if (colongDeg < 0) colongDeg += 360.0;
 }
 
 const char* PlanetName(Planet p)
@@ -179,53 +248,8 @@ const char* PlanetName(Planet p)
 void PlanetRaDec(Planet p, time_t utc, double& raDeg, double& decDeg, double& magOut)
 {
     const double d = DayNumber(utc);
-    const OrbEl& el = PLANETS[(int)p];
-    const double N = el.N0 + el.Nd * d;
-    const double i = el.i0 + el.id * d;
-    const double w = el.w0 + el.wd * d;
-    const double a = el.a;
-    const double e = el.e0 + el.ed * d;
-    const double M = norm360(el.M0 + el.Md * d);
-
-    // Eccentric anomaly (iterate; Mercury's e=0.21 needs a few passes).
-    double E = M + R2D * e * sind(M) * (1.0 + e * cosd(M));
-    for (int it = 0; it < 6; ++it) E = E - (E - R2D * e * sind(E) - M) / (1.0 - e * cosd(E));
-
-    const double xv = a * (cosd(E) - e);
-    const double yv = a * (sqrt(1.0 - e * e) * sind(E));
-    const double v = atan2d(yv, xv);          // true anomaly
-    const double r = sqrt(xv * xv + yv * yv); // heliocentric distance (AU)
-
-    // Heliocentric ecliptic longitude/latitude.
-    const double xh = r * (cosd(N) * cosd(v + w) - sind(N) * sind(v + w) * cosd(i));
-    const double yh = r * (sind(N) * cosd(v + w) + cosd(N) * sind(v + w) * cosd(i));
-    const double zh = r * (sind(v + w) * sind(i));
-    double lonecl = norm360(atan2d(yh, xh));
-    double latecl = atan2d(zh, sqrt(xh * xh + yh * yh));
-
-    // Main Jupiter/Saturn perturbations (the only ones large enough to matter at this precision).
-    if (p == Planet::Jupiter || p == Planet::Saturn) {
-        const double Mj = norm360(PLANETS[3].M0 + PLANETS[3].Md * d);
-        const double Msa = norm360(PLANETS[4].M0 + PLANETS[4].Md * d);
-        if (p == Planet::Jupiter) {
-            lonecl += -0.332 * sind(2 * Mj - 5 * Msa - 67.6);
-            lonecl += -0.056 * sind(2 * Mj - 2 * Msa + 21);
-            lonecl += +0.042 * sind(3 * Mj - 5 * Msa + 21);
-            lonecl += -0.036 * sind(Mj - 2 * Msa);
-            lonecl += +0.022 * cosd(Mj - Msa);
-            lonecl += +0.023 * sind(2 * Mj - 3 * Msa + 52);
-            lonecl += -0.016 * sind(Mj - 5 * Msa - 69);
-        } else {
-            lonecl += +0.812 * sind(2 * Mj - 5 * Msa - 67.6);
-            lonecl += -0.229 * cosd(2 * Mj - 4 * Msa - 2);
-            lonecl += +0.119 * sind(Mj - 2 * Msa - 3);
-            lonecl += +0.046 * sind(2 * Mj - 6 * Msa - 69);
-            lonecl += +0.014 * sind(Mj - 3 * Msa + 32);
-            latecl  += -0.020 * cosd(2 * Mj - 4 * Msa - 2);
-            latecl  += +0.018 * sind(2 * Mj - 6 * Msa - 49);
-        }
-        lonecl = norm360(lonecl);
-    }
+    double lonecl, latecl, r;
+    planetHelio((int)p, d, lonecl, latecl, r);
 
     // Heliocentric -> geocentric: add the Sun's geocentric rectangular position (z_sun = 0).
     const double xhc = r * cosd(lonecl) * cosd(latecl);
@@ -257,6 +281,68 @@ void PlanetRaDec(Planet p, time_t utc, double& raDeg, double& decDeg, double& ma
         case Planet::Mars:    magOut = -1.51 + logrR + 0.016 * FV; break;
         case Planet::Jupiter: magOut = -9.25 + logrR + 0.014 * FV; break;
         default:              magOut = -9.00 + logrR + 0.044 * FV; break; // Saturn (ring term omitted)
+    }
+}
+
+void PlanetHeliocentric(Planet p, time_t utc, double& lonDeg, double& latDeg, double& rAu)
+{
+    planetHelio((int)p, DayNumber(utc), lonDeg, latDeg, rAu);
+}
+
+void EarthHeliocentric(time_t utc, double& lonDeg, double& rAu)
+{
+    double Ms, Ls, rs;
+    const double sunLon = SunLongitude(DayNumber(utc), Ms, Ls, rs);
+    lonDeg = norm360(sunLon + 180.0); // Earth sits opposite the Sun as seen from the Sun
+    rAu = rs;
+}
+
+const char* GalileanName(int i)
+{
+    static const char* N[4] = {"Io", "Europa", "Ganymede", "Callisto"};
+    return (i >= 0 && i < 4) ? N[i] : "";
+}
+
+void JupiterMoons(time_t utc, GalileanMoon out[4])
+{
+    // Meeus "low accuracy" Galilean theory (Astronomical Algorithms ch. 44).
+    const double d = JulianDate(utc) - 2451545.0;
+    const double V = 172.74 + 0.00111588 * d;
+    const double M = 357.529 + 0.9856003 * d;
+    const double sN = 20.020 + 0.0830853 * d + 0.329 * sind(V);
+    const double J = 66.115 + 0.9025179 * d - 0.329 * sind(V);
+    const double A = 1.915 * sind(M) + 0.020 * sind(2 * M);
+    const double B = 5.555 * sind(sN) + 0.168 * sind(2 * sN);
+    const double K = J + A - B;
+    const double Re = 1.00014 - 0.01671 * cosd(M) - 0.00014 * cosd(2 * M);
+    const double rj = 5.20872 - 0.25208 * cosd(sN) - 0.00611 * cosd(2 * sN);
+    const double Delta = sqrt(rj * rj + Re * Re - 2 * rj * Re * cosd(K));
+    const double psi = asind(Re / Delta * sind(K));
+    const double base = d - Delta / 173.0; // correct for light-travel time
+
+    double u[4] = {
+        norm360(163.8067 + 203.4058643 * base + psi - B),
+        norm360(358.4108 + 101.2916334 * base + psi - B),
+        norm360(  5.7129 +  50.2345179 * base + psi - B),
+        norm360(224.8151 +  21.4879801 * base + psi - B),
+    };
+    const double G = 331.18 + 50.310482 * base;
+    const double H = 87.40 + 21.569231 * base;
+    const double uc[4] = {
+        u[0] + 0.473 * sind(2 * (u[0] - u[1])),
+        u[1] + 1.065 * sind(2 * (u[1] - u[2])),
+        u[2] + 0.165 * sind(G),
+        u[3] + 0.843 * sind(H),
+    };
+    const double rad[4] = {
+        5.9057  - 0.0244 * cosd(2 * (u[0] - u[1])),
+        9.3966  - 0.0882 * cosd(2 * (u[1] - u[2])),
+        14.9883 - 0.0216 * cosd(G),
+        26.3627 - 0.1939 * cosd(H),
+    };
+    for (int i = 0; i < 4; ++i) {
+        out[i].x = (float)(-rad[i] * sind(uc[i]));  // east-west offset, Jupiter radii (+ = west; matches pyephem)
+        out[i].front = (cosd(uc[i]) < 0.0);          // nearer-Earth half of the orbit (in front of the disc)
     }
 }
 

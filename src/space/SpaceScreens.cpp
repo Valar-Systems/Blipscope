@@ -210,6 +210,30 @@ uint32_t PlanetTint(int p)
     }
 }
 
+// Galilean-moon tints, index Io/Europa/Ganymede/Callisto.
+uint32_t GalileanTint(int i)
+{
+    switch (i) {
+        case 0:  return lgfx::color888(240, 220, 120); // Io (sulphur yellow)
+        case 1:  return lgfx::color888(235, 235, 240); // Europa (icy white)
+        case 2:  return lgfx::color888(200, 180, 150); // Ganymede
+        default: return lgfx::color888(150, 150, 160); // Callisto (dark grey)
+    }
+}
+
+// What the sunrise terminator is dramatically lighting, by selenographic colongitude (phase-tied,
+// approximate). The colongitude value itself is exact; these are editorial highlights.
+const char* FeatureForColong(double co)
+{
+    if (co < 10 || co >= 350) return "meridian craters: Ptolemaeus, Straight Wall";
+    if (co < 70)  return "Copernicus, Plato & Sinus Iridum at sunrise";
+    if (co < 100) return "near full - Tycho's rays blaze";
+    if (co < 160) return "sunset shadows over the western maria";
+    if (co < 200) return "Mare Crisium & east limb at sunset";
+    if (co < 290) return "thin crescent - Mare Crisium sunrise";
+    return "eastern maria emerging at sunrise";
+}
+
 } // namespace
 
 // --------------------------------------------------------------------------------- ISS tracker
@@ -837,6 +861,95 @@ void SpaceManager::DrawCosmicClock(BandCanvas& c)
     }
 }
 
+// ----------------------------------------------------------------------------- spotter's logbook
+void SpaceManager::DrawLogbook(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+
+    c.setTextSize(1); CenterText(c, "SPOTTER'S LOGBOOK", 16, dim);
+
+    if (!logbook.Any()) {
+        c.setTextSize(2); CenterText(c, "watching...", SCREEN_SIZE_DIV_2 - 18, dim);
+        c.setTextSize(1); CenterText(c, "passes, launches & alerts log here", SCREEN_SIZE_DIV_2 + 10, faint);
+        return;
+    }
+
+    struct Row { const char* label; uint32_t val; };
+    const Row rows[] = {
+        {"ISS passes", logbook.IssPasses()}, {"Launches", logbook.Launches()},
+        {"Auroras", logbook.Auroras()}, {"M+ flares", logbook.Flares()},
+        {"Asteroids", logbook.Asteroids()},
+    };
+    const int lx = SCREEN_SIZE_DIV_2 - 92, rx = SCREEN_SIZE_DIV_2 + 92;
+    int y = 48;
+    c.setTextSize(2);
+    for (const Row& r : rows) {
+        c.setTextColor(dim); c.drawString(r.label, lx, y);
+        const String v = String(r.val);
+        c.setTextColor(fg); c.drawString(v, rx - c.textWidth(v), y);
+        y += 26;
+    }
+
+    const time_t now = time(nullptr);
+    const uint32_t cs = (now > 1600000000) ? logbook.CurrentStreak((long)now) : 0;
+    c.setTextSize(2);
+    CenterText(c, "streak " + String(cs) + "  best " + String(logbook.BestStreak()), 190, accent);
+    char foot[48];
+    snprintf(foot, sizeof(foot), "%u nights   peak Kp %.1f", logbook.Nights(), logbook.MaxKp());
+    c.setTextSize(1); CenterText(c, foot, 218, dim);
+}
+
+// ------------------------------------------------------------------- shake-to-launch (easter egg)
+void SpaceManager::DrawLaunchAnim(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+    const uint32_t bodyC  = space::ScaleColor(lgfx::color888(228, 230, 235), gf);
+    const uint32_t flameO = space::ScaleColor(lgfx::color888(255, 170, 40), gf);
+    const uint32_t flameR = space::ScaleColor(lgfx::color888(255, 80, 30), gf);
+
+    // Deterministic starfield (matches across banded passes).
+    static const struct { int x, y; } st[] = {
+        {50, 80}, {120, 50}, {210, 70}, {300, 46}, {360, 110}, {44, 200}, {380, 220},
+        {80, 320}, {150, 360}, {270, 340}, {330, 300}, {200, 120}, {96, 150}, {320, 170},
+    };
+    for (const auto& s : st) c.fillCircle(s.x, s.y, 1, faint);
+
+    const int cx = SCREEN_SIZE_DIV_2;
+    const unsigned long el = millis() - launchAnimStartMs;
+
+    auto rocket = [&](int ry, bool ignited) {
+        c.fillTriangle(cx - 9, ry - 22, cx + 9, ry - 22, cx, ry - 40, bodyC); // nose
+        c.fillRect(cx - 9, ry - 22, 18, 30, bodyC);                            // body
+        c.fillCircle(cx, ry - 10, 3, accent);                                  // window
+        c.fillTriangle(cx - 9, ry + 2, cx - 9, ry + 12, cx - 17, ry + 12, bodyC); // left fin
+        c.fillTriangle(cx + 9, ry + 2, cx + 9, ry + 12, cx + 17, ry + 12, bodyC); // right fin
+        if (ignited) {
+            const int len = 18 + (int)((el / 70) % 4) * 6; // flicker
+            c.fillTriangle(cx - 8, ry + 9, cx + 8, ry + 9, cx, ry + 9 + len, flameO);
+            c.fillTriangle(cx - 4, ry + 9, cx + 4, ry + 9, cx, ry + 9 + len - 8, flameR);
+        }
+    };
+
+    if (el < LAUNCH_IGNITE_MS) {
+        int n = 3 - (int)(el / 1000); if (n < 1) n = 1;
+        c.setTextSize(2); CenterText(c, "SHAKE DETECTED", 54, dim);
+        c.setTextSize(8); CenterText(c, String(n), SCREEN_SIZE_DIV_2 - 44, accent);
+        rocket(SCREEN_SIZE - 64, false);
+    } else {
+        const float t = (float)(el - LAUNCH_IGNITE_MS) / (float)(LAUNCH_ANIM_MS - LAUNCH_IGNITE_MS);
+        c.setTextSize(3); CenterText(c, "LIFTOFF", 40, accent);
+        rocket(SCREEN_SIZE - 64 - (int)(t * (SCREEN_SIZE - 10)), true);
+    }
+}
+
 // ------------------------------------------------------------------------------- star map
 void SpaceManager::DrawStarMap(BandCanvas& c)
 {
@@ -1122,6 +1235,168 @@ void SpaceManager::DrawDso(BandCanvas& c)
     c.setTextSize(1); CenterText(c, l1, SCREEN_SIZE - 42, fg);
     char l2[40]; snprintf(l2, sizeof(l2), "best of %d showpieces up now", upCount);
     c.setTextSize(1); CenterText(c, l2, SCREEN_SIZE - 24, faint);
+}
+
+// ------------------------------------------------------------------------------ orrery (live)
+void SpaceManager::DrawOrrery(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t sunC   = space::ScaleColor(lgfx::color888(255, 210, 60), gf);
+    const uint32_t earthC = space::ScaleColor(lgfx::color888(70, 150, 235), gf);
+
+    const int cx = SCREEN_SIZE_DIV_2, cy = SCREEN_SIZE_DIV_2, Rmax = SCREEN_SIZE_DIV_2 - 26;
+    c.setTextSize(1); CenterText(c, "SOLAR SYSTEM NOW", 14, dim);
+
+    // sqrt-scaled orbit radii so the inner planets aren't cramped against the Sun.
+    const double maxAu = 9.55475;
+    auto rfor = [&](double au) -> int { return (int)(sqrt(au) / sqrt(maxAu) * Rmax); };
+    const double ringAu[6] = { 0.387, 0.723, 1.000, 1.524, 5.203, 9.555 };
+    for (int i = 0; i < 6; ++i) c.drawCircle(cx, cy, rfor(ringAu[i]), faint);
+    c.fillCircle(cx, cy, 5, sunC);
+
+    const time_t now = time(nullptr);
+    if (now <= 1600000000) { c.setTextSize(1); CenterText(c, "awaiting clock", SCREEN_SIZE - 24, dim); return; }
+
+    auto plot = [&](double lonDeg, double au, int rad, uint32_t col, const char* lab) {
+        const double a = lonDeg * M_PI / 180.0;
+        const int r = rfor(au);
+        const int x = cx + (int)(r * cos(a));
+        const int y = cy - (int)(r * sin(a));
+        c.fillCircle(x, y, rad, col);
+        if (lab) { c.setTextColor(col); c.setTextSize(1); c.drawString(lab, x + rad + 1, y - 3); }
+    };
+
+    for (int i = 0; i < 5; ++i) {
+        double lon, lat, au;
+        space::astro::PlanetHeliocentric((space::astro::Planet)i, now, lon, lat, au);
+        const char* nm = space::astro::PlanetName((space::astro::Planet)i);
+        char ab[3] = { nm[0], nm[1], 0 };
+        plot(lon, au, i >= 3 ? 3 : 2, space::ScaleColor(PlanetTint(i), gf), ab);
+    }
+    double elon, eau;
+    space::astro::EarthHeliocentric(now, elon, eau);
+    plot(elon, eau, 3, earthC, "Ea");
+
+    struct tm t; const time_t tt = now; gmtime_r(&tt, &t);
+    static const char* MON[] = {"Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"};
+    char foot[32]; snprintf(foot, sizeof(foot), "%d %s %d UTC", t.tm_mday, MON[t.tm_mon], t.tm_year + 1900);
+    c.setTextSize(1); CenterText(c, foot, SCREEN_SIZE - 24, faint);
+}
+
+// -------------------------------------------------------------------------- Jupiter's moons
+void SpaceManager::DrawJupMoons(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg    = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim   = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint = space::ScaleColor(palette.faint, gf);
+    const uint32_t jup   = space::ScaleColor(lgfx::color888(220, 190, 150), gf);
+    const uint32_t band  = space::ScaleColor(lgfx::color888(165, 135, 100), gf);
+
+    c.setTextSize(1); CenterText(c, "JUPITER'S MOONS", 16, dim);
+
+    const time_t now = time(nullptr);
+    if (now <= 1600000000) { c.setTextSize(2); CenterText(c, "awaiting clock", SCREEN_SIZE_DIV_2 - 8, dim); return; }
+
+    space::astro::GalileanMoon m[4];
+    space::astro::JupiterMoons(now, m);
+
+    const int cx = SCREEN_SIZE_DIV_2, cy = SCREEN_SIZE_DIV_2;
+    const double scale = (double)(SCREEN_SIZE_DIV_2 - 22) / 27.0; // Callisto (~26 Rj) fits
+    const int span = (int)(27 * scale);
+    c.drawFastHLine(cx - span, cy, 2 * span, faint);
+    c.setTextColor(faint); c.setTextSize(1);
+    c.drawString("W", cx - span - 9, cy - 4); c.drawString("E", cx + span + 3, cy - 4);
+
+    // Jupiter disc with two cloud bands.
+    const int jr = 15;
+    c.fillCircle(cx, cy, jr, jup);
+    c.drawFastHLine(cx - 13, cy - 5, 26, band);
+    c.drawFastHLine(cx - 13, cy + 5, 26, band);
+
+    int transiting = -1;
+    for (int i = 0; i < 4; ++i) {
+        const bool onDisc = fabs(m[i].x) < 1.0;
+        if (onDisc && !m[i].front) continue;          // occulted behind the disc
+        const int mx = cx + (int)(m[i].x * scale);
+        const uint32_t col = space::ScaleColor(GalileanTint(i), gf);
+        if (onDisc && m[i].front) { c.fillCircle(mx, cy, 2, fg); transiting = i; }  // shadow-transit
+        else c.fillCircle(mx, cy, 3, col);
+        char ab[3] = { space::astro::GalileanName(i)[0], space::astro::GalileanName(i)[1], 0 };
+        c.setTextColor(col); c.drawString(ab, mx - 5, (i & 1) ? cy + 9 : cy - 17);
+    }
+
+    // Footer: Jupiter's sky position (if located) + any transit note.
+    char foot[48];
+    double jra, jdec, jmag;
+    space::astro::PlanetRaDec(space::astro::Planet::Jupiter, now, jra, jdec, jmag);
+    if (hasLatLon) {
+        double alt, az;
+        space::astro::AltAz(jra, jdec, deviceLat, deviceLon, now, alt, az);
+        if (alt > 0) snprintf(foot, sizeof(foot), "Jupiter %d deg %s   mag %.1f", (int)alt, Compass8((float)az), jmag);
+        else         snprintf(foot, sizeof(foot), "Jupiter below horizon   mag %.1f", jmag);
+    } else snprintf(foot, sizeof(foot), "mag %.1f", jmag);
+    c.setTextSize(1); CenterText(c, foot, SCREEN_SIZE - 40, dim);
+    if (transiting >= 0) {
+        c.setTextSize(1);
+        CenterText(c, String(space::astro::GalileanName(transiting)) + " in transit", SCREEN_SIZE - 24, fg);
+    } else {
+        c.setTextSize(1); CenterText(c, "to-scale Galilean configuration", SCREEN_SIZE - 24, faint);
+    }
+}
+
+// --------------------------------------------------------------------- lunar terminator & libration
+void SpaceManager::DrawLunarTer(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t dim      = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint    = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent   = space::ScaleColor(palette.accent, gf);
+    const uint32_t bodyDark = space::ScaleColor(lgfx::color888(34, 38, 52), gf);
+    const uint32_t lit      = space::ScaleColor(lgfx::color888(225, 228, 235), gf);
+
+    c.setTextSize(1); CenterText(c, "MOON: TERMINATOR & LIBRATION", 14, dim);
+
+    const int cx = SCREEN_SIZE_DIV_2, cyTop = SCREEN_SIZE_DIV_2 - 26, R = 70;
+    c.fillCircle(cx, cyTop, R, bodyDark);
+
+    const time_t now = time(nullptr);
+    if (now <= 1600000000) {
+        c.drawCircle(cx, cyTop, R, faint);
+        c.setTextSize(1); CenterText(c, "awaiting clock", cyTop + R + 22, dim); return;
+    }
+
+    double libL, libB, colong, mra, mdec, illum;
+    space::astro::MoonLibration(now, libL, libB, colong);
+    space::astro::MoonRaDec(now, mra, mdec, illum);
+
+    // Phase fraction from colongitude (270 new, 0 first qtr, 90 full, 180 last qtr).
+    const double p = fmod((colong - 270.0) / 360.0 + 1.0, 1.0);
+    const double cph = cos(2.0 * M_PI * p);
+    for (int y = -R; y <= R; ++y) {
+        const double hw = sqrt((double)R * R - (double)y * y);
+        int left, right;
+        if (p <= 0.5) { left = (int)(cph * hw); right = (int)hw; }
+        else          { left = (int)(-hw);      right = (int)(-cph * hw); }
+        if (right > left) c.drawFastHLine(cx + left, cyTop + y, right - left, lit);
+    }
+    c.drawCircle(cx, cyTop, R, faint);
+
+    // Libration: mark the limb tipped toward us (+lon -> right/E on screen, +lat -> up/N).
+    const double mag = sqrt(libL * libL + libB * libB);
+    if (mag > 0.3) {
+        const double ux = libL / mag, uy = libB / mag;
+        c.fillCircle(cx + (int)(ux * R), cyTop - (int)(uy * R), 3, accent);
+    }
+
+    char l1[40]; snprintf(l1, sizeof(l1), "%d%% lit   colong %d deg", (int)(illum * 100 + 0.5), (int)colong);
+    c.setTextSize(1); CenterText(c, l1, cyTop + R + 12, dim);
+    c.setTextSize(1); CenterText(c, FitWidth(c, FeatureForColong(colong), SCREEN_SIZE - 24), cyTop + R + 28, accent);
+    char l2[44]; snprintf(l2, sizeof(l2), "libration %.1f%s  %.1f%s",
+                          fabs(libL), libL >= 0 ? "E" : "W", fabs(libB), libB >= 0 ? "N" : "S");
+    c.setTextSize(1); CenterText(c, l2, cyTop + R + 44, faint);
 }
 
 // --------------------------------------------------------------------------- ISS visible pass

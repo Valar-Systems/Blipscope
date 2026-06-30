@@ -304,4 +304,9 @@ long Iso8601ToEpoch(const String& s)
     return DaysFromCivil(Y, (unsigned)Mo, (unsigned)D) * 86400L + h * 3600L + m * 60L + sec;
 }
 
+long EpochUTC(int y, int mo, int d, int h, int min)
+{
+    return DaysFromCivil(y, (unsigned)mo, (unsigned)d) * 86400L + h * 3600L + min * 60L;
+}
+
 } // namespace space

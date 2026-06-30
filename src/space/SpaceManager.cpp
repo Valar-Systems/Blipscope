@@ -80,6 +80,9 @@ void SpaceManager::Initialise()
         if (id == "deepspace") { out = Screen::DeepSpace; return true; }
         if (id == "humans")    { out = Screen::Humans;    return true; }
         if (id == "moon")      { out = Screen::Moon;      return true; }
+        if (id == "eclipse")   { out = Screen::Eclipse;   return true; }
+        if (id == "meteor")    { out = Screen::Meteor;    return true; }
+        if (id == "cosmic")    { out = Screen::CosmicClock; return true; }
         if (id == "splash")    { out = Screen::Splash;    return true; }
         if (id == "clock")     { out = Screen::Clock;     return true; }
         return false;
@@ -165,6 +168,9 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
         case Screen::DeepSpace: DrawDeepSpace(backbuffer); break;
         case Screen::Humans:    DrawHumans(backbuffer); break;
         case Screen::Moon:      DrawMoon(backbuffer); break;
+        case Screen::Eclipse:   DrawEclipse(backbuffer); break;
+        case Screen::Meteor:    DrawMeteor(backbuffer); break;
+        case Screen::CosmicClock: DrawCosmicClock(backbuffer); break;
         case Screen::Splash:    DrawSplash(backbuffer); break;
         case Screen::Clock:
         default:                DrawClock(backbuffer); break;
@@ -191,6 +197,9 @@ bool SpaceManager::HasData(Screen s) const
         }
         case Screen::Humans: return feed.Crew().valid && feed.Crew().number > 0;
         case Screen::Moon:   return true; // computed on-device, always available
+        case Screen::Eclipse:     return true; // baked table, on-device
+        case Screen::Meteor:      return true; // baked table, on-device
+        case Screen::CosmicClock: return true; // on-device clock faces
         // Cold-start welcome: only while no live network feed has data yet (so it drops out once they do).
         case Screen::Splash: {
             bool any = feed.Iss().valid || !feed.Launches().empty() || feed.Wx().valid ||

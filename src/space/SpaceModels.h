@@ -154,5 +154,7 @@ float AuroraOvalLat(float kp);
 
 // Parse "YYYY-MM-DD(T| )hh:mm[:ss][.fff][Z|+oo:oo]" (treated as UTC) to a Unix epoch; 0 on failure.
 long Iso8601ToEpoch(const String& s);
+// Build a UTC Unix epoch from calendar fields (for baked event tables).
+long EpochUTC(int y, int mo, int d, int h, int min);
 
 } // namespace space

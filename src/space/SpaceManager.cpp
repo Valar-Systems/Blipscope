@@ -89,6 +89,9 @@ void SpaceManager::Initialise()
         if (id == "planets")   { out = Screen::Planets;   return true; }
         if (id == "algol")     { out = Screen::Algol;     return true; }
         if (id == "dso")       { out = Screen::Dso;       return true; }
+        if (id == "orrery")    { out = Screen::Orrery;    return true; }
+        if (id == "jupiter")   { out = Screen::JupMoons;  return true; }
+        if (id == "lunar")     { out = Screen::LunarTer;  return true; }
         if (id == "eclipse")   { out = Screen::Eclipse;   return true; }
         if (id == "meteor")    { out = Screen::Meteor;    return true; }
         if (id == "cosmic")    { out = Screen::CosmicClock; return true; }
@@ -203,6 +206,9 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
         case Screen::Planets:   DrawPlanets(backbuffer); break;
         case Screen::Algol:     DrawAlgol(backbuffer); break;
         case Screen::Dso:       DrawDso(backbuffer); break;
+        case Screen::Orrery:    DrawOrrery(backbuffer); break;
+        case Screen::JupMoons:  DrawJupMoons(backbuffer); break;
+        case Screen::LunarTer:  DrawLunarTer(backbuffer); break;
         case Screen::Eclipse:   DrawEclipse(backbuffer); break;
         case Screen::Meteor:    DrawMeteor(backbuffer); break;
         case Screen::CosmicClock: DrawCosmicClock(backbuffer); break;
@@ -239,6 +245,9 @@ bool SpaceManager::HasData(Screen s) const
         case Screen::Planets: return hasLatLon; // on-device planet positions; needs observer location
         case Screen::Algol:   return hasLatLon; // on-device variable-star minima; needs location
         case Screen::Dso:     return hasLatLon; // on-device deep-sky picker; needs location
+        case Screen::Orrery:   return true; // heliocentric, no observer location needed
+        case Screen::JupMoons: return true; // Galilean config is geocentric; altitude shown if located
+        case Screen::LunarTer: return true; // libration/terminator are geocentric
         case Screen::Eclipse:     return true; // baked table, on-device
         case Screen::Meteor:      return true; // baked table, on-device
         case Screen::CosmicClock: return true; // on-device clock faces

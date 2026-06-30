@@ -29,6 +29,22 @@ enum class Planet : uint8_t { Mercury, Venus, Mars, Jupiter, Saturn };
 void PlanetRaDec(Planet p, time_t utc, double& raDeg, double& decDeg, double& magOut);
 const char* PlanetName(Planet p);
 
+// Heliocentric ecliptic position (deg lon/lat, AU) of a planet / of Earth -- for the orrery.
+void PlanetHeliocentric(Planet p, time_t utc, double& lonDeg, double& latDeg, double& rAu);
+void EarthHeliocentric(time_t utc, double& lonDeg, double& rAu);
+
+// Moon optical libration (degrees; + longitude = eastern limb tipped toward us, + latitude = north)
+// and the selenographic colongitude of the Sun (deg; ~270 new, ~0 first qtr, ~90 full, ~180 last) --
+// the longitude of the sunrise terminator, i.e. "what's dramatically lit on the Moon right now".
+void MoonLibration(time_t utc, double& libLonDeg, double& libLatDeg, double& colongDeg);
+
+// Apparent positions of the four Galilean moons (Meeus low-accuracy). x = east-west offset from
+// Jupiter in Jupiter-equatorial-radii (+ = west); front = true when the moon is in front of the
+// disc (nearer Earth) rather than behind. out[0..3] = Io, Europa, Ganymede, Callisto.
+struct GalileanMoon { float x; bool front; };
+void JupiterMoons(time_t utc, GalileanMoon out[4]);
+const char* GalileanName(int i);
+
 // Equatorial -> horizontal for an observer. altDeg is elevation above the horizon (refraction
 // ignored); azDeg is measured from North through East (0=N, 90=E, 180=S, 270=W). lon east-positive.
 void AltAz(double raDeg, double decDeg, double latDeg, double lonDeg, time_t utc,

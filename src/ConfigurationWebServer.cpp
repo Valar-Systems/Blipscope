@@ -47,6 +47,9 @@ static const SpaceScreenDef SPACE_SCREEN_DEFS[] = {
     {"planets",   "Planets up now"},
     {"algol",     "Algol minima watch"},
     {"dso",       "Deep-sky target tonight"},
+    {"orrery",    "Solar-system orrery"},
+    {"jupiter",   "Jupiter's moons"},
+    {"lunar",     "Lunar terminator & libration"},
     {"eclipse",   "Next eclipse"},
     {"meteor",    "Next meteor shower"},
     {"cosmic",    "Cosmic clocks"},
@@ -1013,7 +1016,7 @@ void ConfigurationWebServer::Initialise() {
         const String brightness = prefs.getString("brightness", "255");
         const String spaceScreens = prefs.isKey("space-screens")
             ? prefs.getString("space-screens", "")
-            : String("iss,isspass,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,asteroid,humans,moon,starmap,observing,planets,algol,dso,eclipse,meteor,cosmic,clock");
+            : String("iss,isspass,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,asteroid,humans,moon,starmap,observing,planets,algol,dso,orrery,jupiter,lunar,eclipse,meteor,cosmic,clock");
 
         // Build the screen on/off checkbox grid from the canonical table, reflecting the saved CSV
         // (empty = all on, matching SpaceManager). Each box is "scr-<id>"; the save rebuilds the CSV.

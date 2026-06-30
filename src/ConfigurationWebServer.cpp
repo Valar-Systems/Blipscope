@@ -53,6 +53,7 @@ static const SpaceScreenDef SPACE_SCREEN_DEFS[] = {
     {"eclipse",   "Next eclipse"},
     {"meteor",    "Next meteor shower"},
     {"cosmic",    "Cosmic clocks"},
+    {"logbook",   "Spotter's logbook"},
     {"clock",     "UTC clock"},
 };
 static const size_t SPACE_SCREEN_DEF_COUNT = sizeof(SPACE_SCREEN_DEFS) / sizeof(SPACE_SCREEN_DEFS[0]);
@@ -700,8 +701,9 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                         <label class="flex items-center gap-2"><input name="sp-alert-iss" type="checkbox" %AL_ISS% class="accent-sky-400"><span>ISS passing overhead</span></label>
                         <label class="flex items-center gap-2"><input name="sp-alert-dsn" type="checkbox" %AL_DSN% class="accent-sky-400"><span>Deep-space probe contact (DSN)</span></label>
                         <label class="flex items-center gap-2"><input name="sp-alert-asteroid" type="checkbox" %AL_ASTEROID% class="accent-sky-400"><span>Asteroid inside 1 lunar distance</span></label>
+                        <label class="flex items-center gap-2"><input name="sp-chime" type="checkbox" %AL_CHIME% class="accent-sky-400"><span>Chime on the speaker too</span></label>
                     </div>
-                    <span class="text-xs text-sky-600 mt-1">Leave the topic blank to disable all push alerts. ISS / aurora alerts need a location above.</span>
+                    <span class="text-xs text-sky-600 mt-1">Leave the topic blank to disable push alerts (the speaker chime is independent). ISS / aurora alerts need a location above.</span>
                 </fieldset>
 
                 <fieldset class="border border-sky-400 p-3">
@@ -1012,11 +1014,12 @@ void ConfigurationWebServer::Initialise() {
         const String alertIss = prefs.isKey("sp-alert-iss") ? prefs.getString("sp-alert-iss", "true") : "true";
         const String alertDsn = prefs.isKey("sp-alert-dsn") ? prefs.getString("sp-alert-dsn", "false") : "false";
         const String alertAsteroid = prefs.isKey("sp-alert-asteroid") ? prefs.getString("sp-alert-asteroid", "true") : "true";
+        const String chimeOnAlert = prefs.isKey("sp-chime") ? prefs.getString("sp-chime", "true") : "true";
         const String autoDimEnabled = prefs.isKey("autodim") ? prefs.getString("autodim", "true") : "true";
         const String brightness = prefs.getString("brightness", "255");
         const String spaceScreens = prefs.isKey("space-screens")
             ? prefs.getString("space-screens", "")
-            : String("iss,isspass,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,asteroid,humans,moon,starmap,observing,planets,algol,dso,orrery,jupiter,lunar,eclipse,meteor,cosmic,clock");
+            : String("iss,isspass,launch,kp,solarwind,scales,flare,aurora,dsn,deepspace,asteroid,humans,moon,starmap,observing,planets,algol,dso,orrery,jupiter,lunar,eclipse,meteor,cosmic,logbook,clock");
 
         // Build the screen on/off checkbox grid from the canonical table, reflecting the saved CSV
         // (empty = all on, matching SpaceManager). Each box is "scr-<id>"; the save rebuilds the CSV.
@@ -1150,7 +1153,7 @@ void ConfigurationWebServer::Initialise() {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
-            [spaceBaseUrl, latitude, longitude, ntfyTopic, alertLaunch, alertAurora, alertFlare, alertIss, alertDsn, alertAsteroid, autoDimEnabled, brightness, spaceScreensHtml]
+            [spaceBaseUrl, latitude, longitude, ntfyTopic, alertLaunch, alertAurora, alertFlare, alertIss, alertDsn, alertAsteroid, chimeOnAlert, autoDimEnabled, brightness, spaceScreensHtml]
             (const String& var) -> String {
                 if (var == "SPACE_BASE_URL") return spaceBaseUrl;
                 if (var == "LATITUDE")       return latitude;
@@ -1162,6 +1165,7 @@ void ConfigurationWebServer::Initialise() {
                 if (var == "AL_ISS")         return alertIss == "true" ? "checked" : "";
                 if (var == "AL_DSN")         return alertDsn == "true" ? "checked" : "";
                 if (var == "AL_ASTEROID")    return alertAsteroid == "true" ? "checked" : "";
+                if (var == "AL_CHIME")       return chimeOnAlert == "true" ? "checked" : "";
                 if (var == "AUTODIM")        return autoDimEnabled == "true" ? "checked" : "";
                 if (var == "BRIGHTNESS")     return brightness;
                 if (var == "SPACE_SCREENS_HTML") return spaceScreensHtml;
@@ -1332,6 +1336,7 @@ void ConfigurationWebServer::Initialise() {
         prefs.putString("sp-alert-iss", request->hasParam("sp-alert-iss", true) ? "true" : "false");
         prefs.putString("sp-alert-dsn", request->hasParam("sp-alert-dsn", true) ? "true" : "false");
         prefs.putString("sp-alert-asteroid", request->hasParam("sp-alert-asteroid", true) ? "true" : "false");
+        prefs.putString("sp-chime", request->hasParam("sp-chime", true) ? "true" : "false");
         prefs.putString("autodim", request->hasParam("autodim", true) ? "true" : "false");
 #elif defined(FEATURE_SEISMIC)
         // FEATURE_SEISMIC: persist the Seismic edition config fields.

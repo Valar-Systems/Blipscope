@@ -6,6 +6,7 @@
 
 #include "Layout.h"
 #include "Astro.h"
+#include "Board.h"
 
 // Optional Valar space-feed backend base URL default. Normally NOT injected (Spacescope talks
 // directly to free public space APIs and bakes in nothing); guarded so the file compiles whether
@@ -23,6 +24,11 @@ constexpr unsigned long INTERACT_HOLD_MS = 30000;  // pause auto-rotate this lon
 constexpr long  LAUNCH_T10_S      = 600;  // fire the T-10 alert once inside this lead time
 constexpr long  LAUNCH_T1_S       = 60;   // fire the T-1 alert once inside this lead time
 constexpr float KP_AURORA_THRESH  = 6.0f; // Kp >= this (G2+) -> "aurora likely"
+
+// Shake-to-launch easter egg (the animation-length constants are SpaceManager:: members, since
+// DrawLaunchAnim in SpaceScreens.cpp needs them too).
+constexpr float        SHAKE_G          = 2.3f;   // peak |accel| (g) to trigger -- high, so a desk bump won't
+constexpr unsigned long SHAKE_DEBOUNCE  = 9000;   // ignore further shakes during/after a launch
 
 double Deg2Rad(double d) { return d * M_PI / 180.0; }
 
@@ -95,6 +101,7 @@ void SpaceManager::Initialise()
         if (id == "eclipse")   { out = Screen::Eclipse;   return true; }
         if (id == "meteor")    { out = Screen::Meteor;    return true; }
         if (id == "cosmic")    { out = Screen::CosmicClock; return true; }
+        if (id == "logbook")   { out = Screen::Logbook;   return true; }
         if (id == "splash")    { out = Screen::Splash;    return true; }
         if (id == "clock")     { out = Screen::Clock;     return true; }
         return false;
@@ -139,6 +146,9 @@ void SpaceManager::Initialise()
     alertIss = boolCfg("sp-alert-iss", true);       // ISS visible pass overhead (SGP4)
     alertDsn = boolCfg("sp-alert-dsn", false);      // reserved (no DSN feed yet)
     alertAsteroid = boolCfg("sp-alert-asteroid", true); // asteroid inside ~1 lunar distance
+    chimeOnAlert = boolCfg("sp-chime", true);           // speaker chirp alongside alerts (HAS_AUDIO)
+
+    logbook.Begin(); // persistent tally of caught events + observing streak
 
     currentBrightness = configuredBrightness;
     tft.setBrightness(currentBrightness);
@@ -152,6 +162,33 @@ void SpaceManager::Initialise()
 void SpaceManager::Update()
 {
     feed.Poll();
+    board::BuzzerUpdate(); // pump any in-flight chirp (no-op on the I2S board; ends a beep on the buzzer board)
+
+    // Shake-to-launch: a hard shake kicks off the liftoff animation. High threshold + debounce so a
+    // desk bump won't trigger it. ImuRead is a no-op (returns false) on boards without an IMU.
+    if (variant::HAS_IMU && launchAnimStartMs == 0 && millis() - lastShakeMs > SHAKE_DEBOUNCE &&
+        millis() - lastImuPollMs > 40) {
+        lastImuPollMs = millis();
+        board::Imu imu;
+        if (board::ImuRead(imu)) {
+            const float g = sqrtf(imu.ax * imu.ax + imu.ay * imu.ay + imu.az * imu.az);
+            if (g > SHAKE_G) {
+                launchAnimStartMs = millis();
+                lastShakeMs = millis();
+                launchIgnited = false;
+                lastInteractionMs = millis();                 // pause auto-rotate during the show
+                if (variant::HAS_AUDIO) board::BuzzerChirp(40); // acknowledge the shake
+            }
+        }
+    }
+    if (launchAnimStartMs != 0) {
+        const unsigned long el = millis() - launchAnimStartMs;
+        if (!launchIgnited && el >= LAUNCH_IGNITE_MS) {
+            launchIgnited = true;
+            if (variant::HAS_AUDIO) board::BuzzerChirp(80);    // ignition
+        }
+        if (el >= LAUNCH_ANIM_MS) launchAnimStartMs = 0;       // animation finished
+    }
 
     // Recompute the next ISS pass when the TLE/location changed, the last pass ended, or every 10 min.
     if (feed.Tle().valid && hasLatLon) {
@@ -181,6 +218,9 @@ void SpaceManager::Update()
 
 void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
 {
+    // Shake-to-launch easter egg takes over the whole screen while it plays.
+    if (launchAnimStartMs != 0) { DrawLaunchAnim(backbuffer); return; }
+
     std::vector<Screen> rot = BuildRotation();
     // Keep `current` valid against the live rotation set (data can come and go).
     bool inRot = false;
@@ -212,6 +252,7 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
         case Screen::Eclipse:   DrawEclipse(backbuffer); break;
         case Screen::Meteor:    DrawMeteor(backbuffer); break;
         case Screen::CosmicClock: DrawCosmicClock(backbuffer); break;
+        case Screen::Logbook:   DrawLogbook(backbuffer); break;
         case Screen::Splash:    DrawSplash(backbuffer); break;
         case Screen::Clock:
         default:                DrawClock(backbuffer); break;
@@ -251,6 +292,7 @@ bool SpaceManager::HasData(Screen s) const
         case Screen::Eclipse:     return true; // baked table, on-device
         case Screen::Meteor:      return true; // baked table, on-device
         case Screen::CosmicClock: return true; // on-device clock faces
+        case Screen::Logbook: return true;     // on-device persistent tally (shows even when empty)
         // Cold-start welcome: only while no live network feed has data yet (so it drops out once they do).
         case Screen::Splash: {
             bool any = feed.Iss().valid || !feed.Launches().empty() || feed.Wx().valid ||
@@ -349,6 +391,9 @@ void SpaceManager::CheckAlerts()
     const time_t nowUtc = time(nullptr);
     const bool synced = nowUtc > 1600000000;
 
+    // A short speaker chirp alongside an alert (no-op without HAS_AUDIO or when the user disabled it).
+    auto chime = [&](uint16_t ms) { if (chimeOnAlert && variant::HAS_AUDIO) board::BuzzerChirp(ms); };
+
     // --- Launch: fire once at T-10 min and once at T-1 min for the next launch with a real time.
     // Edge-detected on the T-minus seconds crossing each threshold downward, so a boot mid-window
     // doesn't emit a mislabeled alert (on first sight of a launch we seed lastLaunchSecs = now).
@@ -366,12 +411,15 @@ void SpaceManager::CheckAlerts()
         if (L.mission.length()) who += " - " + L.mission;
         if (!firedT10 && lastLaunchSecs > LAUNCH_T10_S && secs <= LAUNCH_T10_S) {
             firedT10 = true;
+            chime(50);
             if (alertLaunch) SendNtfy("Launch T-10 min", who, "rocket", 4);
         }
         if (!firedT1 && lastLaunchSecs > LAUNCH_T1_S && secs <= LAUNCH_T1_S) {
             firedT1 = true;
+            chime(70);
             if (alertLaunch) SendNtfy("Launch imminent (T-1 min)", who, "rocket,rotating_light", 5);
         }
+        if (lastLaunchSecs > 0 && secs <= 0) logbook.RecordLaunch(nowUtc); // liftoff while we watched
         lastLaunchSecs = secs;
     }
 
@@ -379,6 +427,7 @@ void SpaceManager::CheckAlerts()
     // actually reaches the user's geomagnetic latitude; re-arm when either condition drops.
     const space::SpaceWx& wx = feed.Wx();
     if (wx.valid) {
+        logbook.NoteKp(wx.kp);
         const bool high = wx.kp >= KP_AURORA_THRESH;
         bool reachable = true;
         if (hasLatLon) {
@@ -387,6 +436,8 @@ void SpaceManager::CheckAlerts()
         }
         if (high && reachable && !kpAlerted) {
             kpAlerted = true;
+            logbook.RecordAurora(nowUtc);
+            chime(70);
             int g = (int)floorf(wx.kp) - 4;      // Kp 5..9 -> G1..G5
             if (g < 1) g = 1; else if (g > 5) g = 5;
             char body[64];
@@ -404,6 +455,8 @@ void SpaceManager::CheckAlerts()
         const bool m = fl.fluxWm2 >= 1e-5f;
         if (m && !flareAlerted) {
             flareAlerted = true;
+            logbook.RecordFlare(nowUtc);
+            chime(70);
             const String cls = space::XrayClass(fl.fluxWm2);
             if (alertFlare)
                 SendNtfy("Solar flare " + cls, "GOES X-ray " + cls + " - HF radio impact",
@@ -419,6 +472,8 @@ void SpaceManager::CheckAlerts()
         const long toRise = passRiseEpoch - (long)now;
         if (issAlertedRise != passRiseEpoch && toRise <= 300 && toRise > -60) {
             issAlertedRise = passRiseEpoch;
+            logbook.RecordIssPass((long)now);
+            chime(60);
             char b[64];
             snprintf(b, sizeof(b), "in %ld min, max %.0f deg, rises in the sky", toRise > 0 ? toRise / 60 : 0L, passMaxEl);
             if (alertIss) SendNtfy("ISS passing overhead", b, "satellite,rotating_light", 4);
@@ -435,6 +490,8 @@ void SpaceManager::CheckAlerts()
             if (a.distLd > 0 && a.distLd <= 1.0 && (!near || a.distLd < near->distLd)) near = &a;
         if (near && near->designation != asteroidAlertedDes) {
             asteroidAlertedDes = near->designation;
+            logbook.RecordAsteroid(nowUtc);
+            chime(70);
             char body[96];
             snprintf(body, sizeof(body), "%s passes %.2f lunar distances at %.0f km/s",
                      near->designation.c_str(), near->distLd, near->velKms);

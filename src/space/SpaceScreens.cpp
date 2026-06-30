@@ -861,6 +861,95 @@ void SpaceManager::DrawCosmicClock(BandCanvas& c)
     }
 }
 
+// ----------------------------------------------------------------------------- spotter's logbook
+void SpaceManager::DrawLogbook(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+
+    c.setTextSize(1); CenterText(c, "SPOTTER'S LOGBOOK", 16, dim);
+
+    if (!logbook.Any()) {
+        c.setTextSize(2); CenterText(c, "watching...", SCREEN_SIZE_DIV_2 - 18, dim);
+        c.setTextSize(1); CenterText(c, "passes, launches & alerts log here", SCREEN_SIZE_DIV_2 + 10, faint);
+        return;
+    }
+
+    struct Row { const char* label; uint32_t val; };
+    const Row rows[] = {
+        {"ISS passes", logbook.IssPasses()}, {"Launches", logbook.Launches()},
+        {"Auroras", logbook.Auroras()}, {"M+ flares", logbook.Flares()},
+        {"Asteroids", logbook.Asteroids()},
+    };
+    const int lx = SCREEN_SIZE_DIV_2 - 92, rx = SCREEN_SIZE_DIV_2 + 92;
+    int y = 48;
+    c.setTextSize(2);
+    for (const Row& r : rows) {
+        c.setTextColor(dim); c.drawString(r.label, lx, y);
+        const String v = String(r.val);
+        c.setTextColor(fg); c.drawString(v, rx - c.textWidth(v), y);
+        y += 26;
+    }
+
+    const time_t now = time(nullptr);
+    const uint32_t cs = (now > 1600000000) ? logbook.CurrentStreak((long)now) : 0;
+    c.setTextSize(2);
+    CenterText(c, "streak " + String(cs) + "  best " + String(logbook.BestStreak()), 190, accent);
+    char foot[48];
+    snprintf(foot, sizeof(foot), "%u nights   peak Kp %.1f", logbook.Nights(), logbook.MaxKp());
+    c.setTextSize(1); CenterText(c, foot, 218, dim);
+}
+
+// ------------------------------------------------------------------- shake-to-launch (easter egg)
+void SpaceManager::DrawLaunchAnim(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+    const uint32_t bodyC  = space::ScaleColor(lgfx::color888(228, 230, 235), gf);
+    const uint32_t flameO = space::ScaleColor(lgfx::color888(255, 170, 40), gf);
+    const uint32_t flameR = space::ScaleColor(lgfx::color888(255, 80, 30), gf);
+
+    // Deterministic starfield (matches across banded passes).
+    static const struct { int x, y; } st[] = {
+        {50, 80}, {120, 50}, {210, 70}, {300, 46}, {360, 110}, {44, 200}, {380, 220},
+        {80, 320}, {150, 360}, {270, 340}, {330, 300}, {200, 120}, {96, 150}, {320, 170},
+    };
+    for (const auto& s : st) c.fillCircle(s.x, s.y, 1, faint);
+
+    const int cx = SCREEN_SIZE_DIV_2;
+    const unsigned long el = millis() - launchAnimStartMs;
+
+    auto rocket = [&](int ry, bool ignited) {
+        c.fillTriangle(cx - 9, ry - 22, cx + 9, ry - 22, cx, ry - 40, bodyC); // nose
+        c.fillRect(cx - 9, ry - 22, 18, 30, bodyC);                            // body
+        c.fillCircle(cx, ry - 10, 3, accent);                                  // window
+        c.fillTriangle(cx - 9, ry + 2, cx - 9, ry + 12, cx - 17, ry + 12, bodyC); // left fin
+        c.fillTriangle(cx + 9, ry + 2, cx + 9, ry + 12, cx + 17, ry + 12, bodyC); // right fin
+        if (ignited) {
+            const int len = 18 + (int)((el / 70) % 4) * 6; // flicker
+            c.fillTriangle(cx - 8, ry + 9, cx + 8, ry + 9, cx, ry + 9 + len, flameO);
+            c.fillTriangle(cx - 4, ry + 9, cx + 4, ry + 9, cx, ry + 9 + len - 8, flameR);
+        }
+    };
+
+    if (el < LAUNCH_IGNITE_MS) {
+        int n = 3 - (int)(el / 1000); if (n < 1) n = 1;
+        c.setTextSize(2); CenterText(c, "SHAKE DETECTED", 54, dim);
+        c.setTextSize(8); CenterText(c, String(n), SCREEN_SIZE_DIV_2 - 44, accent);
+        rocket(SCREEN_SIZE - 64, false);
+    } else {
+        const float t = (float)(el - LAUNCH_IGNITE_MS) / (float)(LAUNCH_ANIM_MS - LAUNCH_IGNITE_MS);
+        c.setTextSize(3); CenterText(c, "LIFTOFF", 40, accent);
+        rocket(SCREEN_SIZE - 64 - (int)(t * (SCREEN_SIZE - 10)), true);
+    }
+}
+
 // ------------------------------------------------------------------------------- star map
 void SpaceManager::DrawStarMap(BandCanvas& c)
 {

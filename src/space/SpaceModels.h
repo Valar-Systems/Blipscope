@@ -45,6 +45,21 @@ struct SpaceWx {
     std::vector<float> history; // recent Kp values, oldest..newest, bounded (for a sparkline)
 };
 
+// --------------------------------------------------------------------- solar X-ray flares
+struct Flare {
+    bool valid = false;
+    float fluxWm2 = 0;      // latest GOES long-band (0.1-0.8nm) X-ray flux, W/m^2
+    float peakFluxWm2 = 0;  // peak over the fetched ~6h window
+    long timeEpoch = 0;
+};
+
+// ----------------------------------------------------------------------- humans in space
+struct Crew {
+    bool valid = false;
+    int number = 0;
+    std::vector<std::pair<String, String>> people; // {craft, name}
+};
+
 // ------------------------------------------------------------- Deep Space Network (DSN Now)
 // One active radio link: a dish currently talking to (down) or commanding (up) a spacecraft.
 struct DsnLink {
@@ -70,7 +85,7 @@ struct DeepSpaceTarget {
 };
 
 // ----------------------------------------------------------------- poller request / result
-enum class SpaceEndpoint : uint8_t { Iss, Launch, Kp, Dsn, DeepSpace };
+enum class SpaceEndpoint : uint8_t { Iss, Launch, Kp, Dsn, DeepSpace, Flare, Humans };
 
 // Loop -> worker: a single GET to perform, fully built on the loop task.
 struct SpaceFetchRequest {
@@ -92,6 +107,8 @@ struct SpaceFetchResult {
     SpaceWx wx;
     DsnState dsn;
     DeepSpaceTarget deepTarget;
+    Flare flare;
+    Crew crew;
 };
 
 // -------------------------------------------------------------------------------- parsers
@@ -103,6 +120,11 @@ bool ParseKp(JsonArrayConst root, SpaceWx& out, size_t historyCap);             
 void ParseDsn(const String& xml, DsnState& out, size_t cap);                     // eyes.nasa.gov DSN XML
 // Parse the first $$SOE data line of a Horizons OBSERVER+QUANTITIES=20 result (delta AU, deldot km/s).
 bool ParseHorizonsRange(const String& result, double& deltaAu, double& deldotKms);
+bool ParseFlare(JsonArrayConst root, Flare& out);                               // SWPC GOES xrays-6-hour
+bool ParseCrew(JsonObjectConst root, Crew& out, size_t cap);                    // corquaid people-in-space mirror
+
+// GOES long-band flux (W/m^2) -> NOAA class string, e.g. 1.95e-6 -> "C1.9", 2.4e-5 -> "M2.4".
+String XrayClass(float fluxWm2);
 
 // Parse "YYYY-MM-DD(T| )hh:mm[:ss][.fff][Z|+oo:oo]" (treated as UTC) to a Unix epoch; 0 on failure.
 long Iso8601ToEpoch(const String& s);

@@ -68,6 +68,19 @@ String FriendlyCraft(const String& code)
     return code;
 }
 
+// Moon phase name from the phase fraction p (0=new, 0.5=full).
+const char* PhaseName(double p)
+{
+    if (p < 0.033 || p >= 0.967) return "New Moon";
+    if (p < 0.217) return "Waxing Crescent";
+    if (p < 0.283) return "First Quarter";
+    if (p < 0.467) return "Waxing Gibbous";
+    if (p < 0.533) return "Full Moon";
+    if (p < 0.717) return "Waning Gibbous";
+    if (p < 0.783) return "Last Quarter";
+    return "Waning Crescent";
+}
+
 } // namespace
 
 // --------------------------------------------------------------------------------- ISS tracker
@@ -308,4 +321,127 @@ void SpaceManager::DrawDeepSpace(BandCanvas& c)
     String spd = String(t.speedKms, 1) + " km/s " + (t.receding ? "receding" : "approaching");
     c.setTextSize(1); CenterText(c, spd, SCREEN_SIZE_DIV_2 + 22, dim);
     c.setTextSize(1); CenterText(c, FmtLightTime(t.distanceAu * 499.004784) + " light delay", SCREEN_SIZE_DIV_2 + 44, faint);
+}
+
+// ----------------------------------------------------------------------------- solar flare
+void SpaceManager::DrawFlare(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+    const uint32_t warn   = space::ScaleColor(palette.warn, gf);
+    const uint32_t alert  = space::ScaleColor(palette.alert, gf);
+
+    const int cx = SCREEN_SIZE_DIV_2, cy = SCREEN_SIZE_DIV_2;
+    const int R = SCREEN_SIZE_DIV_2 - 22, r = R - 28;
+    const float startA = 135.0f, sweep = 270.0f;
+
+    c.setTextSize(1); CenterText(c, "SOLAR X-RAY FLUX", 18, dim);
+    c.fillArc(cx, cy, r, R, startA, startA + sweep, faint);
+
+    const space::Flare& f = feed.Flare();
+    if (!f.valid) { c.setTextSize(2); CenterText(c, "acquiring...", cy - 8, dim); return; }
+
+    // Log scale across the NOAA decades A(1e-8) .. X(1e-3).
+    float frac = (log10f(f.fluxWm2 > 0 ? f.fluxWm2 : 1e-9f) + 8.0f) / 5.0f;
+    if (frac < 0) frac = 0; if (frac > 1) frac = 1;
+    const float ang = startA + frac * sweep;
+
+    const String cls = space::XrayClass(f.fluxWm2);
+    const char L = cls.length() ? cls[0] : 'A';
+    const uint32_t col = (L == 'X') ? alert : (L == 'M') ? warn : (L == 'C') ? fg : dim;
+
+    c.fillArc(cx, cy, r, R, startA, ang, col);
+    c.fillArc(cx, cy, r - 3, R + 3, ang - 1.5f, ang + 1.5f, accent);
+
+    c.setTextSize(5); CenterText(c, cls, cy - 30, col);
+    c.setTextSize(1); CenterText(c, "A   B   C   M   X", cy + 18, faint);
+    c.setTextSize(1); CenterText(c, "6h peak " + space::XrayClass(f.peakFluxWm2), SCREEN_SIZE - 30, dim);
+}
+
+// --------------------------------------------------------------------------- humans in space
+void SpaceManager::DrawHumans(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+
+    c.setTextSize(1); CenterText(c, "HUMANS IN SPACE", 22, dim);
+
+    const space::Crew& cr = feed.Crew();
+    if (!cr.valid || cr.number <= 0) { c.setTextSize(2); CenterText(c, "acquiring...", SCREEN_SIZE_DIV_2 - 8, dim); return; }
+
+    char num[8]; snprintf(num, sizeof(num), "%d", cr.number);
+    c.setTextSize(6); CenterText(c, num, SCREEN_SIZE_DIV_2 - 58, fg);
+    c.setTextSize(1); CenterText(c, "aboard right now", SCREEN_SIZE_DIV_2 + 6, faint);
+
+    int iss = 0, tg = 0, other = 0;
+    for (const auto& p : cr.people) {
+        if (p.first == "ISS") ++iss;
+        else if (p.first == "Tiangong") ++tg;
+        else ++other;
+    }
+    String tally;
+    if (iss) tally += "ISS " + String(iss);
+    if (tg)  { if (tally.length()) tally += "    "; tally += "Tiangong " + String(tg); }
+    if (other) { if (tally.length()) tally += "    "; tally += "+" + String(other); }
+    c.setTextSize(1); CenterText(c, tally, SCREEN_SIZE_DIV_2 + 28, dim);
+
+    // Rotate one crew member's name at a time.
+    if (!cr.people.empty()) {
+        const auto& p = cr.people[cardIndex % (int)cr.people.size()];
+        c.setTextSize(2); CenterText(c, FitWidth(c, p.second, SCREEN_SIZE - 40), SCREEN_SIZE - 58, accent);
+        c.setTextSize(1); CenterText(c, p.first, SCREEN_SIZE - 32, faint);
+    }
+}
+
+// ------------------------------------------------------------------------------------- moon
+void SpaceManager::DrawMoon(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+    const uint32_t bodyDark = space::ScaleColor(lgfx::color888(34, 38, 52), gf);
+    const uint32_t lit      = space::ScaleColor(lgfx::color888(225, 228, 235), gf); // pale moonlight
+
+    const int cx = SCREEN_SIZE_DIV_2, cyTop = SCREEN_SIZE_DIV_2 - 30, R = 76;
+    c.setTextSize(1); CenterText(c, "MOON", 18, dim);
+    c.fillCircle(cx, cyTop, R, bodyDark);
+
+    const time_t now = time(nullptr);
+    if (now <= 1600000000) { // need NTP for the absolute phase
+        c.drawCircle(cx, cyTop, R, faint);
+        c.setTextSize(1); CenterText(c, "awaiting clock", cyTop + R + 22, dim);
+        return;
+    }
+
+    // Phase fraction p (0=new, 0.5=full) from the synodic month since a known new moon.
+    constexpr double SYN = 29.530588853;
+    constexpr long REF = 947182440; // 2000-01-06 18:14 UTC new moon
+    double age = fmod(((double)now - (double)REF) / 86400.0, SYN);
+    if (age < 0) age += SYN;
+    const double p = age / SYN;
+    const double cph = cos(2.0 * M_PI * p);
+
+    // Lit span per scanline: waxing lit on the right, waning on the left (N-hemisphere convention).
+    for (int y = -R; y <= R; ++y) {
+        const double hw = sqrt((double)R * R - (double)y * y);
+        int left, right;
+        if (p <= 0.5) { left = (int)(cph * hw); right = (int)hw; }
+        else          { left = (int)(-hw);      right = (int)(-cph * hw); }
+        if (right > left) c.drawFastHLine(cx + left, cyTop + y, right - left, lit);
+    }
+    c.drawCircle(cx, cyTop, R, faint);
+
+    const double illum = (1.0 - cph) / 2.0;
+    const double daysToFull = fmod(0.5 - p + 1.0, 1.0) * SYN;
+    c.setTextSize(2); CenterText(c, PhaseName(p), cyTop + R + 14, accent);
+    char info[44];
+    snprintf(info, sizeof(info), "%d%% lit   full in %.0fd", (int)(illum * 100 + 0.5), daysToFull);
+    c.setTextSize(1); CenterText(c, info, cyTop + R + 40, dim);
 }

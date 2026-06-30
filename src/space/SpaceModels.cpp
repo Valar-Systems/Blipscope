@@ -181,6 +181,65 @@ bool ParseHorizonsRange(const String& result, double& deltaAu, double& deldotKms
     return deltaAu > 0;
 }
 
+bool ParseFlare(JsonArrayConst root, Flare& out)
+{
+    if (root.isNull()) return false;
+    // SWPC GOES xrays-6-hour.json: array of {time_tag, satellite, flux, energy}. Use the long band
+    // (0.1-0.8nm) -- the band the NOAA flare class is defined on. Newest sample is last.
+    float latest = -1, peak = 0;
+    String t;
+    for (JsonObjectConst o : root) {
+        const char* e = o["energy"] | "";
+        if (strcmp(e, "0.1-0.8nm") != 0) continue;
+        const float fx = o["flux"] | 0.0f;
+        if (fx <= 0) continue;
+        latest = fx;
+        t = (const char*)(o["time_tag"] | "");
+        if (fx > peak) peak = fx;
+    }
+    if (latest < 0) return false;
+    out.fluxWm2 = latest;
+    out.peakFluxWm2 = peak;
+    out.timeEpoch = Iso8601ToEpoch(t);
+    out.valid = true;
+    return true;
+}
+
+bool ParseCrew(JsonObjectConst root, Crew& out, size_t cap)
+{
+    out.people.clear();
+    out.valid = false;
+    if (root.isNull()) return false;
+    // corquaid people-in-space mirror: {number, people:[{name, iss(bool), spacecraft, agency, ...}]}.
+    // iss flags the station (true=ISS, false=Tiangong -- the only two crewed stations today).
+    out.number = root["number"] | 0;
+    JsonArrayConst arr = root["people"].as<JsonArrayConst>();
+    if (!arr.isNull()) {
+        for (JsonObjectConst p : arr) {
+            if (out.people.size() >= cap) break;
+            const bool iss = p["iss"] | true;
+            out.people.push_back({ iss ? String("ISS") : String("Tiangong"),
+                                   String((const char*)(p["name"] | "")) });
+        }
+    }
+    if (out.number <= 0) out.number = (int)out.people.size();
+    out.valid = true;
+    return true;
+}
+
+String XrayClass(float f)
+{
+    char letter; float div;
+    if (f >= 1e-4f)      { letter = 'X'; div = 1e-4f; }
+    else if (f >= 1e-5f) { letter = 'M'; div = 1e-5f; }
+    else if (f >= 1e-6f) { letter = 'C'; div = 1e-6f; }
+    else if (f >= 1e-7f) { letter = 'B'; div = 1e-7f; }
+    else                 { letter = 'A'; div = 1e-8f; }
+    char b[8];
+    snprintf(b, sizeof(b), "%c%.1f", letter, f > 0 ? f / div : 0.0f);
+    return String(b);
+}
+
 long Iso8601ToEpoch(const String& s)
 {
     if (s.length() < 16) return 0; // need at least "YYYY-MM-DDThh:mm"

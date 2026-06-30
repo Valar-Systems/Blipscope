@@ -13,6 +13,8 @@ constexpr uint32_t LAUNCH_MS     = 1200000;   // ~20 m: editorial, slow-moving; 
 constexpr uint32_t KP_MS         = 720000;    // ~12 m: SWPC Kp is 3-hourly with a recent estimate
 constexpr uint32_t DSN_MS        = 30000;     // ~30 s: which dish talks to whom changes slowly
 constexpr uint32_t DEEPSPACE_MS  = 120000;    // ~2 m per target (round-robin); probes move slowly
+constexpr uint32_t FLARE_MS      = 90000;     // ~90 s: GOES X-ray updates ~1 min; flares evolve fast
+constexpr uint32_t HUMANS_MS     = 3600000;   // ~1 h: the crew roster changes rarely
 
 constexpr uint32_t MAX_BACKOFF_MS = 600000; // cap exponential backoff at 10 m
 
@@ -64,6 +66,8 @@ void SpaceFeedClient::Configure(const Config& newCfg)
     feeds[F_KP].intervalMs        = (uint32_t)(KP_MS * sc);
     feeds[F_DSN].intervalMs       = (uint32_t)(DSN_MS * sc);
     feeds[F_DEEPSPACE].intervalMs = (uint32_t)(DEEPSPACE_MS * sc);
+    feeds[F_FLARE].intervalMs     = (uint32_t)(FLARE_MS * sc);
+    feeds[F_HUMANS].intervalMs    = (uint32_t)(HUMANS_MS * sc);
 
     // Stage the first poll of each endpoint shortly after (re)config, fanned out by ~400 ms so
     // they don't all hit the single TLS client at once.
@@ -141,6 +145,15 @@ bool SpaceFeedClient::BuildRequest(int feedIdx, SpaceFetchRequest& req)
             req.endpoint = space::SpaceEndpoint::Dsn;
             req.url = "https://eyes.nasa.gov/dsn/data/dsn.xml";
             return true;
+        case F_FLARE:
+            req.endpoint = space::SpaceEndpoint::Flare;
+            req.url = "https://services.swpc.noaa.gov/json/goes/primary/xrays-6-hour.json";
+            return true;
+        case F_HUMANS:
+            req.endpoint = space::SpaceEndpoint::Humans;
+            // corquaid GitHub-Pages mirror: fresh + reliable HTTPS (open-notify is stale/flaky).
+            req.url = "https://corquaid.github.io/international-space-station-APIs/JSON/people-in-space.json";
+            return true;
         case F_DEEPSPACE: {
             // Needs NTP for the START/STOP date window; skip (re-arm) until the clock is set.
             const time_t now = time(nullptr);
@@ -182,6 +195,8 @@ int SpaceFeedClient::FeedForEndpoint(space::SpaceEndpoint e)
         case space::SpaceEndpoint::Kp:        return F_KP;
         case space::SpaceEndpoint::Dsn:       return F_DSN;
         case space::SpaceEndpoint::DeepSpace: return F_DEEPSPACE;
+        case space::SpaceEndpoint::Flare:     return F_FLARE;
+        case space::SpaceEndpoint::Humans:    return F_HUMANS;
     }
     return F_ISS;
 }
@@ -225,6 +240,12 @@ void SpaceFeedClient::ApplyResult(const SpaceFetchResult& res)
                 deepTargets[res.targetIdx].name = nm;
             }
             break;
+        case space::SpaceEndpoint::Flare:
+            flare = res.flare;
+            break;
+        case space::SpaceEndpoint::Humans:
+            crew = res.crew;
+            break;
     }
 
     // One-line confirmation the first time each feed lands (handy for field/serial diagnostics).
@@ -252,6 +273,13 @@ void SpaceFeedClient::ApplyResult(const SpaceFetchResult& res)
                     Serial.printf("[space] deepspace ok: %s %.2f AU\n",
                                   deepTargets[res.targetIdx].name.c_str(),
                                   deepTargets[res.targetIdx].distanceAu);
+                break;
+            case space::SpaceEndpoint::Flare:
+                Serial.printf("[space] flare ok: %s (%.1e W/m2)\n",
+                              space::XrayClass(flare.fluxWm2).c_str(), flare.fluxWm2);
+                break;
+            case space::SpaceEndpoint::Humans:
+                Serial.printf("[space] humans ok: %d in space\n", crew.number);
                 break;
         }
     }
@@ -326,6 +354,13 @@ void SpaceFeedClient::Fetch(HttpRequestManager& http,
             }
             break;
         }
+        case space::SpaceEndpoint::Flare:
+            // SWPC GOES X-ray: a bare JSON array of {time_tag, flux, energy} objects.
+            res.ok = space::ParseFlare(doc.as<JsonArrayConst>(), res.flare);
+            break;
+        case space::SpaceEndpoint::Humans:
+            res.ok = space::ParseCrew(doc.as<JsonObjectConst>(), res.crew, 16);
+            break;
         case space::SpaceEndpoint::Dsn:
             break; // handled above
     }

@@ -46,7 +46,7 @@ private:
     // so BuildRotation() is never empty; Splash is a cold-start welcome shown only until a live
     // feed has data. Later stages add more (DSN, Voyager, flares, ISS passes, ...).
     enum class Screen : uint8_t {
-        Iss, Launch, Kp, Dsn, DeepSpace, Splash, Clock, COUNT
+        Iss, Launch, Kp, Flare, Dsn, DeepSpace, Humans, Moon, Splash, Clock, COUNT
     };
 
     ConfigurationWebServer& configServer;
@@ -88,6 +88,7 @@ private:
     long lastLaunchSecs = 0;                 // previous T-minus seconds, for up->down crossing detection
     bool firedT10 = false, firedT1 = false;  // launch lead-time edges already consumed
     bool kpAlerted = false;                  // high-Kp episode already alerted (reset when Kp drops)
+    bool flareAlerted = false;               // M+ flare episode already alerted (reset when it drops)
     unsigned long lastNotifyMs = 0;          // throttle ntfy POSTs
 
     // ---- touch / gestures ----
@@ -111,6 +112,9 @@ private:
     void DrawKp(BandCanvas& c);
     void DrawDsn(BandCanvas& c);
     void DrawDeepSpace(BandCanvas& c);
+    void DrawFlare(BandCanvas& c);
+    void DrawHumans(BandCanvas& c);
+    void DrawMoon(BandCanvas& c);
     void DrawSplash(BandCanvas& c);
     void DrawClock(BandCanvas& c);
 

@@ -20,6 +20,54 @@ String FitWidth(BandCanvas& c, String s, int maxW)
     return s + "...";
 }
 
+// Human data-rate, e.g. 1559000 -> "1.6 Mbps", 14220 -> "14 kbps", 160 -> "160 bps".
+String FmtRate(double bps)
+{
+    if (bps >= 1e6) return String(bps / 1e6, 1) + " Mbps";
+    if (bps >= 1e3) return String(bps / 1e3, 0) + " kbps";
+    return String((long)bps) + " bps";
+}
+
+// Light-travel time from seconds, e.g. 84945 -> "23h 36m", 312 -> "5m 12s", 5 -> "5s".
+String FmtLightTime(double s)
+{
+    char b[24];
+    if (s >= 3600)     snprintf(b, sizeof(b), "%dh %02dm", (int)(s / 3600), (int)(s / 60) % 60);
+    else if (s >= 60)  snprintf(b, sizeof(b), "%dm %02ds", (int)(s / 60), (int)s % 60);
+    else               snprintf(b, sizeof(b), "%ds", (int)(s + 0.5));
+    return String(b);
+}
+
+// DSN dish -> ground complex from the DSS number (11-29 Goldstone, 30-49 Canberra, 50-69 Madrid).
+String DishComplex(const String& dish)
+{
+    int i = 0;
+    while (i < (int)dish.length() && (dish[i] < '0' || dish[i] > '9')) ++i;
+    const int n = dish.substring(i).toInt();
+    if (n >= 11 && n <= 29) return "Goldstone";
+    if (n >= 30 && n <= 49) return "Canberra";
+    if (n >= 50 && n <= 69) return "Madrid";
+    return "DSN";
+}
+
+// Friendly names for a curated set of well-known DSN spacecraft codes; raw code otherwise.
+String FriendlyCraft(const String& code)
+{
+    if (code == "VGR1") return "Voyager 1";
+    if (code == "VGR2") return "Voyager 2";
+    if (code == "NHPC") return "New Horizons";
+    if (code == "JWST") return "James Webb";
+    if (code == "MRO")  return "Mars Recon Orbiter";
+    if (code == "MVN")  return "MAVEN";
+    if (code == "M01O") return "Mars Odyssey";
+    if (code == "TGO")  return "ExoMars TGO";
+    if (code == "PSP")  return "Parker Solar Probe";
+    if (code == "DSCO") return "DSCOVR";
+    if (code == "ACE")  return "ACE";
+    if (code == "CHDR") return "Chandra";
+    return code;
+}
+
 } // namespace
 
 // --------------------------------------------------------------------------------- ISS tracker
@@ -192,4 +240,72 @@ void SpaceManager::DrawClock(BandCanvas& c)
 
     c.setTextSize(1); CenterText(c, "UTC", SCREEN_SIZE_DIV_2 - 46, faint);
     c.setTextSize(5); CenterText(c, hhmmss, SCREEN_SIZE_DIV_2 - 28, fg);
+}
+
+// ------------------------------------------------------------------------------- DSN Now
+void SpaceManager::DrawDsn(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+
+    c.setTextSize(1); CenterText(c, "DEEP SPACE NETWORK", 20, dim);
+
+    const space::DsnState& d = feed.Dsn();
+    if (!d.valid || d.links.empty()) {
+        c.setTextSize(2); CenterText(c, d.valid ? "no active links" : "acquiring...", SCREEN_SIZE_DIV_2 - 8, dim);
+        return;
+    }
+
+    // Headline: rotate one active link at a time so each gets the round panel to itself.
+    const int n = (int)d.links.size();
+    const space::DsnLink& L = d.links[cardIndex % n];
+    const uint32_t dirColor = L.up ? accent : fg; // uplink (commanding) vs downlink (receiving)
+
+    c.setTextSize(3); CenterText(c, FitWidth(c, FriendlyCraft(L.spacecraft), SCREEN_SIZE - 40), SCREEN_SIZE_DIV_2 - 56, fg);
+    c.setTextSize(1); CenterText(c, DishComplex(L.dish) + "  " + L.dish, SCREEN_SIZE_DIV_2 - 18, dim);
+
+    String rate = (L.up ? "^ " : "v ") + FmtRate(L.dataRateBps);
+    if (L.band.length()) rate += "   " + L.band + "-band";
+    c.setTextSize(2); CenterText(c, rate, SCREEN_SIZE_DIV_2 + 8, dirColor);
+
+    char foot[40];
+    snprintf(foot, sizeof(foot), "%d active link%s   %s", n, n == 1 ? "" : "s", L.up ? "uplink" : "downlink");
+    c.setTextSize(1); CenterText(c, foot, SCREEN_SIZE - 32, faint);
+}
+
+// --------------------------------------------------------------------------- deep-space distance
+void SpaceManager::DrawDeepSpace(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = space::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = space::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = space::ScaleColor(palette.faint, gf);
+    const uint32_t accent = space::ScaleColor(palette.accent, gf);
+
+    c.setTextSize(1); CenterText(c, "DEEP SPACE", 20, dim);
+
+    // Gather the targets that have a fix; rotate through them.
+    std::vector<const space::DeepSpaceTarget*> live;
+    for (const space::DeepSpaceTarget& t : feed.DeepTargets()) if (t.valid) live.push_back(&t);
+    if (live.empty()) {
+        c.setTextSize(2); CenterText(c, "acquiring...", SCREEN_SIZE_DIV_2 - 8, dim);
+        return;
+    }
+    const space::DeepSpaceTarget& t = *live[cardIndex % (int)live.size()];
+
+    String name = t.name; name.toUpperCase();
+    c.setTextSize(2); CenterText(c, name, SCREEN_SIZE_DIV_2 - 58, accent);
+
+    // Distance: AU once past ~1 AU, otherwise million-km so JWST/Parker read sensibly.
+    String big;
+    if (t.distanceAu >= 1.0) big = String(t.distanceAu, 1) + " AU";
+    else                     big = String(t.distanceAu * 149.597871, 2) + "M km";
+    c.setTextSize(4); CenterText(c, big, SCREEN_SIZE_DIV_2 - 24, fg);
+
+    String spd = String(t.speedKms, 1) + " km/s " + (t.receding ? "receding" : "approaching");
+    c.setTextSize(1); CenterText(c, spd, SCREEN_SIZE_DIV_2 + 22, dim);
+    c.setTextSize(1); CenterText(c, FmtLightTime(t.distanceAu * 499.004784) + " light delay", SCREEN_SIZE_DIV_2 + 44, faint);
 }

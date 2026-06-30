@@ -17,6 +17,18 @@ long DaysFromCivil(int y, unsigned m, unsigned d)
     return era * 146097L + (long)doe - 719468;
 }
 
+// Extract an XML attribute value: name="value", searched within s[from..to). "" if absent.
+String XmlAttr(const String& s, int from, int to, const char* name)
+{
+    String key = String(name) + "=\"";
+    const int k = s.indexOf(key, from);
+    if (k < 0 || k >= to) return "";
+    const int v = k + (int)key.length();
+    const int e = s.indexOf('"', v);
+    if (e < 0 || e > to) return "";
+    return s.substring(v, e);
+}
+
 } // namespace
 
 namespace space {
@@ -99,6 +111,74 @@ bool ParseKp(JsonArrayConst root, SpaceWx& out, size_t historyCap)
     out.history.assign(vals.begin() + start, vals.end());
     out.valid = true;
     return true;
+}
+
+void ParseDsn(const String& xml, DsnState& out, size_t cap)
+{
+    out.links.clear();
+    out.valid = false;
+    if (xml.isEmpty()) return;
+
+    const int n = (int)xml.length();
+    int d = 0;
+    // Walk each <dish ...> ... </dish> block; collect its active up/down signals naming a craft.
+    while ((d = xml.indexOf("<dish ", d)) >= 0 && out.links.size() < cap) {
+        int dEnd = xml.indexOf("</dish>", d);
+        if (dEnd < 0) dEnd = n;
+        const int dishTagEnd = xml.indexOf('>', d);
+        const String dishName = XmlAttr(xml, d, dishTagEnd, "name");
+
+        int s = dishTagEnd;
+        while (s < dEnd && out.links.size() < cap) {
+            const int up = xml.indexOf("<upSignal", s);
+            const int dn = xml.indexOf("<downSignal", s);
+            int sig = -1; bool isUp = false;
+            if (up >= 0 && up < dEnd && (dn < 0 || up < dn)) { sig = up; isUp = true; }
+            else if (dn >= 0 && dn < dEnd) { sig = dn; isUp = false; }
+            if (sig < 0) break;
+
+            const int sigEnd = xml.indexOf('>', sig);
+            if (sigEnd < 0 || sigEnd > dEnd) break;
+            const String craft = XmlAttr(xml, sig, sigEnd, "spacecraft");
+            if (XmlAttr(xml, sig, sigEnd, "active") == "true" && craft.length() && craft != "none") {
+                DsnLink L;
+                L.dish = dishName;
+                L.spacecraft = craft;
+                L.band = XmlAttr(xml, sig, sigEnd, "band");
+                L.dataRateBps = XmlAttr(xml, sig, sigEnd, "dataRate").toDouble();
+                L.up = isUp;
+                out.links.push_back(L);
+            }
+            s = sigEnd + 1;
+        }
+        d = dEnd + 1;
+    }
+    out.valid = true; // a successful fetch+parse, even if no links are currently active
+}
+
+bool ParseHorizonsRange(const String& result, double& deltaAu, double& deldotKms)
+{
+    const int soe = result.indexOf("$$SOE");
+    if (soe < 0) return false;
+    const int nl = result.indexOf('\n', soe);
+    if (nl < 0) return false;
+    int lineEnd = result.indexOf('\n', nl + 1);
+    if (lineEnd < 0) lineEnd = (int)result.length();
+
+    String line = result.substring(nl + 1, lineEnd);
+    line.trim();
+    if (line.isEmpty() || line.startsWith("$$EOE")) return false;
+
+    // Columns: "<date> <hh:mm> <delta> <deldot>" -- the last two whitespace tokens are delta, deldot.
+    int sp = line.lastIndexOf(' ');
+    if (sp < 0) return false;
+    deldotKms = line.substring(sp + 1).toDouble();
+    line = line.substring(0, sp);
+    line.trim();
+    sp = line.lastIndexOf(' ');
+    if (sp < 0) return false;
+    deltaAu = line.substring(sp + 1).toDouble();
+    return deltaAu > 0;
 }
 
 long Iso8601ToEpoch(const String& s)

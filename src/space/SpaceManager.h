@@ -46,7 +46,7 @@ private:
     // so BuildRotation() is never empty; Splash is a cold-start welcome shown only until a live
     // feed has data. Later stages add more (DSN, Voyager, flares, ISS passes, ...).
     enum class Screen : uint8_t {
-        Iss, Launch, Kp, Splash, Clock, COUNT
+        Iss, Launch, Kp, Dsn, DeepSpace, Splash, Clock, COUNT
     };
 
     ConfigurationWebServer& configServer;
@@ -68,6 +68,8 @@ private:
     Screen current = Screen::Clock;
     unsigned long lastAdvanceMs = 0;         // last auto-rotate tick
     unsigned long lastInteractionMs = 0;     // last touch; pauses auto-rotate briefly
+    int cardIndex = 0;                       // rotating sub-item index for multi-item screens (DSN/deep-space)
+    unsigned long lastCardMs = 0;            // last sub-item advance
 
     // ---- brightness / night-dim ----
     uint8_t currentBrightness = 255;
@@ -107,6 +109,8 @@ private:
     void DrawIss(BandCanvas& c);
     void DrawLaunch(BandCanvas& c);
     void DrawKp(BandCanvas& c);
+    void DrawDsn(BandCanvas& c);
+    void DrawDeepSpace(BandCanvas& c);
     void DrawSplash(BandCanvas& c);
     void DrawClock(BandCanvas& c);
 

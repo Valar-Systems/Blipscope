@@ -43,9 +43,11 @@ public:
     const space::IssState& Iss() const { return iss; }
     const std::vector<space::Launch>& Launches() const { return launches; }
     const space::SpaceWx& Wx() const { return wx; }
+    const space::DsnState& Dsn() const { return dsn; }
+    const std::vector<space::DeepSpaceTarget>& DeepTargets() const { return deepTargets; }
 
 private:
-    enum FeedIdx : uint8_t { F_ISS, F_LAUNCH, F_KP, F_COUNT };
+    enum FeedIdx : uint8_t { F_ISS, F_LAUNCH, F_KP, F_DSN, F_DEEPSPACE, F_COUNT };
     struct Feed {
         uint32_t intervalMs = 0;
         uint32_t nextDueMs = 0;
@@ -60,6 +62,9 @@ private:
     space::IssState iss;
     std::vector<space::Launch> launches;
     space::SpaceWx wx;
+    space::DsnState dsn;
+    std::vector<space::DeepSpaceTarget> deepTargets; // one per tracked probe, sized in Begin()
+    int deepIdx = 0;                                 // DeepSpace round-robin cursor (one target per poll)
 
     bool firstLogged[F_COUNT] = {}; // log a one-line summary the first time each feed lands
 
@@ -75,7 +80,7 @@ private:
                       const space::SpaceFetchRequest& req, space::SpaceFetchResult& res);
 
     int PickDueFeed(uint32_t now) const;               // most-overdue ready feed, or -1
-    bool BuildRequest(int feedIdx, space::SpaceFetchRequest& req) const;
+    bool BuildRequest(int feedIdx, space::SpaceFetchRequest& req); // non-const: advances deepIdx
     void ApplyResult(const space::SpaceFetchResult& res);
     static int FeedForEndpoint(space::SpaceEndpoint e);
 };

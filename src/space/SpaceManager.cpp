@@ -69,11 +69,13 @@ void SpaceManager::Initialise()
     enabledOrder.clear();
     const String screensCfg = configServer.GetStoredString("space-screens");
     auto idToScreen = [](const String& id, Screen& out) -> bool {
-        if (id == "iss")    { out = Screen::Iss;    return true; }
-        if (id == "launch") { out = Screen::Launch; return true; }
-        if (id == "kp")     { out = Screen::Kp;     return true; }
-        if (id == "splash") { out = Screen::Splash; return true; }
-        if (id == "clock")  { out = Screen::Clock;  return true; }
+        if (id == "iss")       { out = Screen::Iss;       return true; }
+        if (id == "launch")    { out = Screen::Launch;    return true; }
+        if (id == "kp")        { out = Screen::Kp;        return true; }
+        if (id == "dsn")       { out = Screen::Dsn;       return true; }
+        if (id == "deepspace") { out = Screen::DeepSpace; return true; }
+        if (id == "splash")    { out = Screen::Splash;    return true; }
+        if (id == "clock")     { out = Screen::Clock;     return true; }
         return false;
     };
     if (screensCfg.length()) {
@@ -132,6 +134,9 @@ void SpaceManager::Update()
     UpdateBrightness();
     HandleTouch();
     AutoRotate();
+
+    // Advance the rotating sub-item index for multi-item screens (DSN links / deep-space targets).
+    if (millis() - lastCardMs > 4000) { lastCardMs = millis(); cardIndex++; }
 }
 
 void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
@@ -143,12 +148,14 @@ void SpaceManager::Draw(BandCanvas& backbuffer, bool /*firstPass*/)
     if (!inRot && !rot.empty()) current = rot.front();
 
     switch (current) {
-        case Screen::Iss:    DrawIss(backbuffer); break;
-        case Screen::Launch: DrawLaunch(backbuffer); break;
-        case Screen::Kp:     DrawKp(backbuffer); break;
-        case Screen::Splash: DrawSplash(backbuffer); break;
+        case Screen::Iss:       DrawIss(backbuffer); break;
+        case Screen::Launch:    DrawLaunch(backbuffer); break;
+        case Screen::Kp:        DrawKp(backbuffer); break;
+        case Screen::Dsn:       DrawDsn(backbuffer); break;
+        case Screen::DeepSpace: DrawDeepSpace(backbuffer); break;
+        case Screen::Splash:    DrawSplash(backbuffer); break;
         case Screen::Clock:
-        default:             DrawClock(backbuffer); break;
+        default:                DrawClock(backbuffer); break;
     }
 
     DrawScreenDots(backbuffer, rot);
@@ -160,8 +167,18 @@ bool SpaceManager::HasData(Screen s) const
         case Screen::Iss:    return feed.Iss().valid;
         case Screen::Launch: return !feed.Launches().empty();
         case Screen::Kp:     return feed.Wx().valid;
+        case Screen::Dsn:    return feed.Dsn().valid && !feed.Dsn().links.empty();
+        case Screen::DeepSpace: {
+            for (const space::DeepSpaceTarget& t : feed.DeepTargets()) if (t.valid) return true;
+            return false;
+        }
         // Cold-start welcome: only while no live feed has data yet (so it drops out once they do).
-        case Screen::Splash: return !(feed.Iss().valid || !feed.Launches().empty() || feed.Wx().valid);
+        case Screen::Splash: {
+            bool any = feed.Iss().valid || !feed.Launches().empty() || feed.Wx().valid ||
+                       (feed.Dsn().valid && !feed.Dsn().links.empty());
+            for (const space::DeepSpaceTarget& t : feed.DeepTargets()) if (t.valid) any = true;
+            return !any;
+        }
         case Screen::Clock:  return true; // always-available idle screen
         default:             return false;
     }

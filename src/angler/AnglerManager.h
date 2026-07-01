@@ -11,6 +11,8 @@
 #include "BandCanvas.h"
 #include "AnglerTheme.h"
 #include "Solunar.h"
+#include "AnglerFeedClient.h"
+#include "AnglerLogbook.h"
 
 // FEATURE_ANGLER top-level controller -- the Angler edition: a desk fishing companion whose hero is
 // an on-device SOLUNAR "best bite times" forecast. The sixth sibling to AircraftManager / EamManager
@@ -29,7 +31,8 @@ class AnglerManager
 public:
     AnglerManager(ConfigurationWebServer& config, OpenSkyAuthTokenHandler& auth,
                   HttpRequestManager& httpManager, LGFX& tftGfx)
-        : configServer(config), authHandler(auth), http(httpManager), tft(tftGfx)
+        : configServer(config), authHandler(auth), http(httpManager), tft(tftGfx),
+          feed(httpManager)
     {
     }
     ~AnglerManager() = default;
@@ -43,18 +46,23 @@ private:
     // "ang-screens" CSV. Clock is the always-available idle screen; Splash is the cold-start prompt
     // (shown until a location is set and the ephemeris is ready). Later stages add Tides, Barometer,
     // Wind, Water, CatchLog before Splash.
-    enum class Screen : uint8_t { Bite, Moon, Sun, Splash, Clock, COUNT };
+    enum class Screen : uint8_t { Bite, Tides, Barometer, Wind, Water, Moon, Sun, CatchLog,
+                                  Splash, Clock, COUNT };
 
     ConfigurationWebServer& configServer;
     OpenSkyAuthTokenHandler& authHandler;   // reserved (parity with the other apps); unused here
     HttpRequestManager& http;
     LGFX& tft;
+    AnglerFeedClient feed;                   // Stage-2 live feeds (tides / weather / marine)
+    AnglerLogbook logbook;                   // persistent catch log
 
     // ---- config-derived state (set in Initialise) ----
     angler::Palette palette = angler::PaletteDefault();
     bool hasLatLon = false;
     double deviceLat = 0.0, deviceLon = 0.0;
     long tzOffsetSec = 0;                     // local offset for bite windows / rise-set / clock
+    String tideStation;                       // NOAA CO-OPS station id (empty = no tide screens)
+    bool imperial = true;                     // ft/degF/mph/inHg vs m/degC/(km/h)/hPa
     std::vector<Screen> enabledOrder;
     uint8_t configuredBrightness = 255;
     bool autoDim = true;
@@ -81,9 +89,14 @@ private:
     // ---- ntfy + chime alerts (shared ntfy-topic key + POST pattern) ----
     String ntfyTopic;
     bool alertBite = true;                    // push when a major feeding window opens
+    bool alertBaro = false;                   // push when the barometer is falling fast
+    bool alertTide = false;                   // push when a hi/lo tide is ~30 min away
     bool chimeOnAlert = true;                 // also chirp the speaker (HAS_AUDIO)
-    time_t lastAlertedBiteCenter = 0;         // edge: don't re-alert the same major
-    bool alertSeeded = false;                 // don't fire for a window already open at boot/reconfig
+    // edge state so each alert fires once per event, seeded at boot so the backlog never fires
+    time_t lastAlertedBiteCenter = 0;
+    bool baroAlerted = false;                 // a fast-fall episode already alerted (reset when it eases)
+    time_t lastAlertedTide = 0;               // tide event already alerted for
+    bool alertSeeded = false;
     unsigned long lastNotifyMs = 0;
 
     // ---- touch / gestures ----
@@ -112,8 +125,13 @@ private:
 
     // screens (defined in AnglerScreens.cpp)
     void DrawBite(BandCanvas& c);
+    void DrawTides(BandCanvas& c);
+    void DrawBarometer(BandCanvas& c);
+    void DrawWind(BandCanvas& c);
+    void DrawWater(BandCanvas& c);
     void DrawMoon(BandCanvas& c);
     void DrawSun(BandCanvas& c);
+    void DrawCatchLog(BandCanvas& c);
     void DrawSplash(BandCanvas& c);
     void DrawClock(BandCanvas& c);
     void DrawDetailCard(BandCanvas& c);
@@ -135,4 +153,20 @@ private:
     void CenterText(BandCanvas& c, const String& s, int y, uint32_t color);
     String LocalHM(time_t utc) const;                              // UTC epoch -> local "HH:MM"
     static String HM(time_t utc, long tzSec);
+
+    bool TimeReady() const { return time(nullptr) > 1600000000; }   // NTP-synced clock
+
+    // Barometer trend derived from the weather feed's hourly sea-level pressure history.
+    struct BaroTrend { bool valid = false; float rateHpaPerH = 0; float nowHpa = 0; float pastHpa = 0; };
+    BaroTrend ComputeBaro() const;
+
+    // unit-aware display helpers (imperial flag from config)
+    const char* TempUnit()  const { return imperial ? "F" : "C"; }
+    const char* WindUnit()  const { return imperial ? "mph" : "km/h"; }
+    const char* WaveUnit()  const { return imperial ? "ft" : "m"; }
+    const char* PressUnit() const { return imperial ? "inHg" : "hPa"; }
+    float SeaTempDisp(float c)  const { return imperial ? c * 1.8f + 32.0f : c; }   // marine SST is degC
+    float WaveDisp(float m)     const { return imperial ? m * 3.28084f : m; }        // marine wave is m
+    float PressDisp(float hpa)  const { return imperial ? hpa * 0.02953f : hpa; }    // pressure is hPa
+    static const char* CompassPoint(int deg);
 };

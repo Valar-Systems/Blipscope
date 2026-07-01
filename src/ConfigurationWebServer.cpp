@@ -67,10 +67,15 @@ static const size_t SPACE_SCREEN_DEF_COUNT = sizeof(SPACE_SCREEN_DEFS) / sizeof(
 // set; later stages add tides / barometer / wind / water / catch-log rows here.
 struct AnglerScreenDef { const char* id; const char* label; };
 static const AnglerScreenDef ANGLER_SCREEN_DEFS[] = {
-    {"bite",  "Bite forecast (solunar)"},
-    {"moon",  "Moon phase & rise/set"},
-    {"sun",   "Sun & golden hour"},
-    {"clock", "Local clock"},
+    {"bite",      "Bite forecast (solunar)"},
+    {"tides",     "Tides (NOAA)"},
+    {"barometer", "Barometer & trend"},
+    {"wind",      "Wind & weather"},
+    {"water",     "Water temp & waves"},
+    {"moon",      "Moon phase & rise/set"},
+    {"sun",       "Sun & golden hour"},
+    {"catchlog",  "Catch log"},
+    {"clock",     "Local clock"},
 };
 static const size_t ANGLER_SCREEN_DEF_COUNT = sizeof(ANGLER_SCREEN_DEFS) / sizeof(ANGLER_SCREEN_DEFS[0]);
 #endif
@@ -1067,6 +1072,25 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                 <span class="text-xs text-teal-600">Bite windows, rise/set and the clock are shown in this local time. Defaults to the nominal zone from your longitude; set it (incl. DST) for exact times.</span>
 
                 <fieldset class="border border-teal-400 p-3">
+                    <legend class="px-2">Water &amp; units</legend>
+                    <label class="flex flex-col sm:flex-row sm:items-center gap-2">
+                        <span>NOAA tide station:</span>
+                        <input id="tidestation" name="ang-tide-station" value='%TIDE_STATION%' placeholder="e.g. 9414290"
+                            class="flex-1 border border-teal-400 bg-gray-900 w-full px-3 py-2 text-lg sm:text-base sm:px-1 sm:py-0">
+                        <button type="button" id="findstation"
+                            class="border border-teal-400 px-3 py-2 sm:py-0 cursor-pointer whitespace-nowrap">Find nearest</button>
+                    </label>
+                    <span class="text-xs text-teal-600 mt-1">US tide predictions + water temp from NOAA (keyless). Blank hides the Tides screen. "Find nearest" uses the location above, or browse <a href="https://tidesandcurrents.noaa.gov/" target="_blank" rel="noopener" class="underline">tidesandcurrents.noaa.gov</a>. Weather, barometer and waves work worldwide with no station.</span>
+                    <label class="flex flex-col sm:flex-row sm:items-center gap-2 mt-3">
+                        <span>Units:</span>
+                        <select name="ang-units" class="border border-teal-400 bg-gray-900 px-3 py-2 sm:py-0">
+                            <option value="imperial" %UNITS_IMP%>Imperial (ft, &deg;F, mph, inHg)</option>
+                            <option value="metric" %UNITS_MET%>Metric (m, &deg;C, km/h, hPa)</option>
+                        </select>
+                    </label>
+                </fieldset>
+
+                <fieldset class="border border-teal-400 p-3">
                     <legend class="px-2">Screens</legend>
                     <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         %ANGLER_SCREENS_HTML%
@@ -1083,6 +1107,8 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                     </label>
                     <div class="grid grid-cols-1 gap-2 mt-3">
                         <label class="flex items-center gap-2"><input name="ang-alert-bite" type="checkbox" %AL_BITE% class="accent-teal-400"><span>A major bite window is opening</span></label>
+                        <label class="flex items-center gap-2"><input name="ang-alert-baro" type="checkbox" %AL_BARO% class="accent-teal-400"><span>Barometer falling fast (front moving in)</span></label>
+                        <label class="flex items-center gap-2"><input name="ang-alert-tide" type="checkbox" %AL_TIDE% class="accent-teal-400"><span>A high/low tide is ~30 min away</span></label>
                         <label class="flex items-center gap-2"><input name="ang-chime" type="checkbox" %AL_CHIME% class="accent-teal-400"><span>Also chime the speaker on alerts</span></label>
                     </div>
                     <span class="text-xs text-teal-600 mt-1">Leave the topic blank to disable push alerts (the speaker chime still works). Alerts need a location above.</span>
@@ -1127,6 +1153,26 @@ static const char CONFIG_HTML[] PROGMEM = R"(
                 fetch('/reset-wifi', { method: 'POST' })
                     .then(r => r.text())
                     .then(html => document.getElementById('result').innerHTML = html);
+            });
+            // Resolve the nearest NOAA tide-prediction station in the browser (it has the heap for the
+            // full ~3450-station list); the device then only ever stores + polls the one station id.
+            document.getElementById('findstation').addEventListener('click', async function() {
+                const la = parseFloat(document.querySelector('[name=latitude]').value);
+                const lo = parseFloat(document.querySelector('[name=longitude]').value);
+                if (isNaN(la) || isNaN(lo)) { alert('Enter latitude and longitude first.'); return; }
+                const btn = this; btn.textContent = 'searching...';
+                try {
+                    const r = await fetch('https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions');
+                    const j = await r.json();
+                    let best = null, bd = 1e18;
+                    for (const s of j.stations) {
+                        const dx = (s.lng - lo) * Math.cos(la * Math.PI / 180), dy = s.lat - la;
+                        const d = dx * dx + dy * dy;
+                        if (d < bd) { bd = d; best = s; }
+                    }
+                    if (best) { document.getElementById('tidestation').value = best.id; btn.textContent = '✓ ' + best.name.substring(0, 16); }
+                    else btn.textContent = 'none found';
+                } catch (e) { btn.textContent = 'error - enter manually'; }
             });
         </script>
     </body>
@@ -1326,13 +1372,17 @@ void ConfigurationWebServer::Initialise() {
             ? prefs.getString("tz-offset", "0")
             : String((int)round(longitude.toFloat() / 15.0));
         const String ntfyTopic = prefs.getString("ntfy-topic", "");
+        const String tideStation = prefs.getString("ang-tide-station", "");
+        const String angUnits = prefs.isKey("ang-units") ? prefs.getString("ang-units", "imperial") : "imperial";
         const String alertBite = prefs.isKey("ang-alert-bite") ? prefs.getString("ang-alert-bite", "true") : "true";
+        const String alertBaro = prefs.isKey("ang-alert-baro") ? prefs.getString("ang-alert-baro", "false") : "false";
+        const String alertTide = prefs.isKey("ang-alert-tide") ? prefs.getString("ang-alert-tide", "false") : "false";
         const String chimeOnAlert = prefs.isKey("ang-chime") ? prefs.getString("ang-chime", "true") : "true";
         const String autoDimEnabled = prefs.isKey("autodim") ? prefs.getString("autodim", "true") : "true";
         const String brightness = prefs.getString("brightness", "255");
         const String anglerScreens = prefs.isKey("ang-screens")
             ? prefs.getString("ang-screens", "")
-            : String("bite,moon,sun,clock");
+            : String("bite,tides,barometer,wind,water,moon,sun,catchlog,clock");
 
         // Build the screen on/off checkbox grid from the canonical table, reflecting the saved CSV
         // (empty = all on, matching AnglerManager). Each box is "scr-<id>"; the save rebuilds the CSV.
@@ -1521,13 +1571,18 @@ void ConfigurationWebServer::Initialise() {
         AsyncWebServerResponse* response = request->beginResponse(
             200, "text/html",
             (const uint8_t*)CONFIG_HTML, sizeof(CONFIG_HTML) - 1,
-            [latitude, longitude, tzOffset, ntfyTopic, alertBite, chimeOnAlert, autoDimEnabled, brightness, anglerScreensHtml]
+            [latitude, longitude, tzOffset, tideStation, angUnits, ntfyTopic, alertBite, alertBaro, alertTide, chimeOnAlert, autoDimEnabled, brightness, anglerScreensHtml]
             (const String& var) -> String {
                 if (var == "LATITUDE")            return latitude;
                 if (var == "LONGITUDE")           return longitude;
                 if (var == "TZ_OFFSET")           return tzOffset;
+                if (var == "TIDE_STATION")        return tideStation;
+                if (var == "UNITS_IMP")           return angUnits == "metric" ? "" : "selected";
+                if (var == "UNITS_MET")           return angUnits == "metric" ? "selected" : "";
                 if (var == "NTFY_TOPIC")          return ntfyTopic;
                 if (var == "AL_BITE")             return alertBite == "true" ? "checked" : "";
+                if (var == "AL_BARO")             return alertBaro == "true" ? "checked" : "";
+                if (var == "AL_TIDE")             return alertTide == "true" ? "checked" : "";
                 if (var == "AL_CHIME")            return chimeOnAlert == "true" ? "checked" : "";
                 if (var == "AUTODIM")             return autoDimEnabled == "true" ? "checked" : "";
                 if (var == "BRIGHTNESS")          return brightness;
@@ -1720,6 +1775,8 @@ void ConfigurationWebServer::Initialise() {
         TrySaveParam("latitude");
         TrySaveParam("longitude");
         TrySaveParam("tz-offset");
+        TrySaveParam("ang-tide-station");
+        TrySaveParam("ang-units");
         TrySaveParam("ntfy-topic");
         TrySaveParam("brightness");
 
@@ -1739,6 +1796,8 @@ void ConfigurationWebServer::Initialise() {
 
         // checkboxes: absent in the body when unchecked, so hasParam() is the on/off signal
         prefs.putString("ang-alert-bite", request->hasParam("ang-alert-bite", true) ? "true" : "false");
+        prefs.putString("ang-alert-baro", request->hasParam("ang-alert-baro", true) ? "true" : "false");
+        prefs.putString("ang-alert-tide", request->hasParam("ang-alert-tide", true) ? "true" : "false");
         prefs.putString("ang-chime", request->hasParam("ang-chime", true) ? "true" : "false");
         prefs.putString("autodim", request->hasParam("autodim", true) ? "true" : "false");
 #endif

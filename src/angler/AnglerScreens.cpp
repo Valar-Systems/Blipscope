@@ -22,7 +22,7 @@ String FitWidth(BandCanvas& c, String s, int maxW)
     return s + "...";
 }
 
-// "H:MM" for >= 1h, else "Mm". Used for bite-window countdowns.
+// "H:MM" for >= 1h, else "Mm". Used for bite-window / tide countdowns.
 String FormatDur(long secs)
 {
     if (secs < 0) secs = 0;
@@ -31,6 +31,28 @@ String FormatDur(long secs)
     if (h > 0) snprintf(b, sizeof(b), "%d:%02d", h, m);
     else       snprintf(b, sizeof(b), "%dm", m);
     return String(b);
+}
+
+// A short label for a WMO weather code (Open-Meteo's weather_code).
+const char* WmoText(int c)
+{
+    switch (c) {
+        case 0:  return "Clear";
+        case 1:  return "Mainly clear";
+        case 2:  return "Partly cloudy";
+        case 3:  return "Overcast";
+        case 45: case 48: return "Fog";
+        case 51: case 53: case 55: return "Drizzle";
+        case 56: case 57: return "Freezing drizzle";
+        case 61: case 63: case 65: return "Rain";
+        case 66: case 67: return "Freezing rain";
+        case 71: case 73: case 75: case 77: return "Snow";
+        case 80: case 81: case 82: return "Showers";
+        case 85: case 86: return "Snow showers";
+        case 95: return "Thunderstorm";
+        case 96: case 99: return "Thunderstorm, hail";
+        default: return "--";
+    }
 }
 
 } // namespace
@@ -245,6 +267,261 @@ void AnglerManager::DrawSun(BandCanvas& c)
     }
 }
 
+// --------------------------------------------------------------------------------- tides
+void AnglerManager::DrawTides(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = angler::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = angler::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = angler::ScaleColor(palette.faint, gf);
+    const uint32_t accent = angler::ScaleColor(palette.accent, gf);
+
+    const angler::TideData& td = feed.Tide();
+    const time_t now = time(nullptr);
+
+    c.setTextSize(1);
+    CenterText(c, "TIDES", 18, dim);
+
+    if (td.events.empty()) { c.setTextSize(2); CenterText(c, "no tide data", SCREEN_SIZE_DIV_2, dim); return; }
+
+    // Headline: countdown to the next extreme + its height.
+    const angler::TideEvent* next = nullptr;
+    for (const angler::TideEvent& e : td.events) if (e.t > now) { next = &e; break; }
+    if (next) {
+        c.setTextSize(1);
+        CenterText(c, next->high ? "NEXT HIGH" : "NEXT LOW", 42, dim);
+        c.setTextSize(3);
+        CenterText(c, "in " + FormatDur(next->t - now), 60, next->high ? accent : fg);
+        char h[28];
+        snprintf(h, sizeof(h), "%.1f %s  at %s", next->height, WaveUnit(), LocalHM(next->t).c_str());
+        c.setTextSize(1);
+        CenterText(c, h, 98, dim);
+    }
+
+    // Tide curve: cosine-interpolated between the hi/lo events, over the upcoming window.
+    const int L = 34, R = SCREEN_SIZE - 34, yTop = 130, yBot = 250;
+    const time_t t0 = td.events.front().t, t1 = td.events.back().t;
+    if (t1 > t0) {
+        float minH = td.events.front().height, maxH = minH;
+        for (const angler::TideEvent& e : td.events) { minH = min(minH, e.height); maxH = max(maxH, e.height); }
+        if (maxH - minH < 0.1f) maxH = minH + 0.1f;
+        auto hAt = [&](time_t t) -> float {
+            if (t <= td.events.front().t) return td.events.front().height;
+            for (size_t i = 0; i + 1 < td.events.size(); ++i) {
+                const angler::TideEvent& a = td.events[i];
+                const angler::TideEvent& b = td.events[i + 1];
+                if (t >= a.t && t <= b.t) {
+                    const float ph = (float)(t - a.t) / (float)(b.t - a.t);
+                    return a.height + (b.height - a.height) * (1.0f - cosf(ph * (float)M_PI)) * 0.5f;
+                }
+            }
+            return td.events.back().height;
+        };
+        auto yOf = [&](float hh) { return yBot - (int)lround((hh - minH) / (maxH - minH) * (yBot - yTop)); };
+        int px = L, py = yOf(hAt(t0));
+        for (int x = L + 3; x <= R; x += 3) {
+            const time_t t = t0 + (time_t)((long)(t1 - t0) * (x - L) / (R - L));
+            const int y = yOf(hAt(t));
+            c.drawLine(px, py, x, y, fg);
+            px = x; py = y;
+        }
+        // event dots + H/L labels
+        for (const angler::TideEvent& e : td.events) {
+            const int x = L + (int)((long)(R - L) * (e.t - t0) / (t1 - t0));
+            const int y = yOf(e.height);
+            c.fillCircle(x, y, 3, e.high ? accent : dim);
+        }
+        // "now" marker
+        if (now >= t0 && now <= t1) {
+            const int x = L + (int)((long)(R - L) * (now - t0) / (t1 - t0));
+            c.drawFastVLine(x, yTop - 6, (yBot - yTop) + 12, faint);
+        }
+    }
+
+    if (feed.HaveWaterTemp()) {
+        char w[24];
+        snprintf(w, sizeof(w), "Water %.0f%s", feed.WaterTemp(), TempUnit());
+        c.setTextSize(2);
+        CenterText(c, w, SCREEN_SIZE - 52, accent);
+    }
+}
+
+// --------------------------------------------------------------------------------- barometer
+void AnglerManager::DrawBarometer(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = angler::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = angler::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = angler::ScaleColor(palette.faint, gf);
+    const uint32_t accent = angler::ScaleColor(palette.accent, gf);
+
+    const angler::WeatherData& w = feed.Weather();
+    const int cx = SCREEN_SIZE_DIV_2, cy = SCREEN_SIZE_DIV_2;
+
+    c.setTextSize(1);
+    CenterText(c, "BAROMETER", 18, dim);
+    if (!w.valid) { c.setTextSize(2); CenterText(c, "no data", cy, dim); return; }
+
+    char b[16];
+    if (imperial) snprintf(b, sizeof(b), "%.2f", PressDisp(w.pressureHpa));
+    else          snprintf(b, sizeof(b), "%.0f", PressDisp(w.pressureHpa));
+    c.setTextSize(6); CenterText(c, b, cy - 74, fg);
+    c.setTextSize(2); CenterText(c, PressUnit(), cy - 20, dim);
+
+    const BaroTrend bt = ComputeBaro();
+    if (bt.valid) {
+        const bool fall = bt.rateHpaPerH <= -0.2f, rise = bt.rateHpaPerH >= 0.2f;
+        const uint32_t tc = fall ? accent : rise ? fg : dim;   // falling glass = gold (the good bite)
+        const int ax = cx, ay = cy + 22;
+        if (fall)      c.fillTriangle(ax - 9, ay - 9, ax + 9, ay - 9, ax, ay + 9, tc);
+        else if (rise) c.fillTriangle(ax - 9, ay + 9, ax + 9, ay + 9, ax, ay - 9, tc);
+        else           c.fillRect(ax - 9, ay - 2, 18, 4, tc);
+
+        char r[36];
+        snprintf(r, sizeof(r), "%s  %+.1f hPa/h", fall ? "FALLING" : rise ? "RISING" : "STEADY", bt.rateHpaPerH);
+        c.setTextSize(1); CenterText(c, r, cy + 42, tc);
+        CenterText(c, fall ? "fish feeding ahead of a front" : rise ? "bite may slow" : "stable",
+                   cy + 60, dim);
+
+        // 24h sparkline of sea-level pressure.
+        if (w.pressHist.size() >= 2) {
+            float mn = w.pressHist[0].second, mx = mn;
+            for (const auto& s : w.pressHist) { mn = min(mn, s.second); mx = max(mx, s.second); }
+            if (mx - mn < 0.5f) mx = mn + 0.5f;
+            const int L = 40, Rr = SCREEN_SIZE - 40, yb = SCREEN_SIZE - 34, yt = SCREEN_SIZE - 70;
+            const int n = (int)w.pressHist.size();
+            int px = L, py = yb - (int)lround((w.pressHist[0].second - mn) / (mx - mn) * (yb - yt));
+            for (int i = 1; i < n; ++i) {
+                const int x = L + (Rr - L) * i / (n - 1);
+                const int y = yb - (int)lround((w.pressHist[i].second - mn) / (mx - mn) * (yb - yt));
+                c.drawLine(px, py, x, y, faint);
+                px = x; py = y;
+            }
+        }
+    }
+}
+
+// --------------------------------------------------------------------------------- wind
+void AnglerManager::DrawWind(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = angler::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = angler::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = angler::ScaleColor(palette.faint, gf);
+    const uint32_t accent = angler::ScaleColor(palette.accent, gf);
+
+    const angler::WeatherData& w = feed.Weather();
+    const int cx = SCREEN_SIZE_DIV_2, cy = SCREEN_SIZE_DIV_2 - 6;
+
+    c.setTextSize(1);
+    CenterText(c, "WIND", 18, dim);
+    if (!w.valid) { c.setTextSize(2); CenterText(c, "no data", SCREEN_SIZE_DIV_2, dim); return; }
+
+    const int Rr = SCREEN_SIZE_DIV_2 - 70;
+    c.drawCircle(cx, cy, Rr, faint);
+    c.setTextColor(faint);
+    CenterText(c, "N", cy - Rr - 12, faint);
+    c.drawString("E", cx + Rr + 4, cy - 4);
+    c.drawString("W", cx - Rr - 12, cy - 4);
+    CenterText(c, "S", cy + Rr + 4, faint);
+
+    // Arrow flies WITH the wind: tail at the FROM bearing, head at the opposite side.
+    const double af = w.windDir * M_PI / 180.0;
+    const double at = (w.windDir + 180) * M_PI / 180.0;
+    const int fx = cx + (int)lround(Rr * sin(af)), fy = cy - (int)lround(Rr * cos(af));
+    const int hx = cx + (int)lround(Rr * sin(at)), hy = cy - (int)lround(Rr * cos(at));
+    c.drawLine(fx, fy, hx, hy, accent);
+    double dx = hx - fx, dy = hy - fy; const double len = sqrt(dx * dx + dy * dy);
+    if (len > 1) {
+        dx /= len; dy /= len;
+        const double pxv = -dy, pyv = dx;
+        c.fillTriangle(hx, hy,
+                       hx - (int)(14 * dx + 7 * pxv), hy - (int)(14 * dy + 7 * pyv),
+                       hx - (int)(14 * dx - 7 * pxv), hy - (int)(14 * dy - 7 * pyv), accent);
+    }
+
+    c.setTextSize(5); CenterText(c, String((int)lround(w.windSpeed)), cy - 22, fg);
+    c.setTextSize(1); CenterText(c, WindUnit(), cy + 20, dim);
+
+    char foot[40];
+    snprintf(foot, sizeof(foot), "gust %d  from %s", (int)lround(w.windGust), CompassPoint(w.windDir));
+    c.setTextSize(1); CenterText(c, foot, SCREEN_SIZE - 54, dim);
+    char foot2[40];
+    snprintf(foot2, sizeof(foot2), "%.0f%s  %s", w.airTemp, TempUnit(), WmoText(w.weatherCode));
+    CenterText(c, foot2, SCREEN_SIZE - 34, faint);
+}
+
+// --------------------------------------------------------------------------------- water
+void AnglerManager::DrawWater(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = angler::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = angler::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = angler::ScaleColor(palette.faint, gf);
+    const uint32_t accent = angler::ScaleColor(palette.accent, gf);
+
+    const angler::MarineData& m = feed.Marine();
+    c.setTextSize(1);
+    CenterText(c, "WATER", 18, dim);
+
+    // Water temperature: prefer the NOAA station gauge, else the modeled sea-surface temp.
+    bool haveT = false; float temp = 0; bool fromStation = false;
+    if (feed.HaveWaterTemp())      { temp = feed.WaterTemp(); haveT = true; fromStation = true; }
+    else if (m.valid && m.haveSst) { temp = SeaTempDisp(m.seaTempC); haveT = true; }
+
+    if (!haveT && !(m.valid && m.haveWave)) { c.setTextSize(2); CenterText(c, "no water data", SCREEN_SIZE_DIV_2, dim); return; }
+
+    if (haveT) {
+        char b[12]; snprintf(b, sizeof(b), "%.0f", temp);
+        c.setTextSize(7); CenterText(c, b, 96, accent);
+        c.setTextSize(2); CenterText(c, String("water ") + TempUnit(), 170, dim);
+    } else {
+        c.setTextSize(2); CenterText(c, "water temp n/a", 120, dim);
+    }
+
+    if (m.valid && m.haveWave) {
+        char wv[28]; snprintf(wv, sizeof(wv), "waves %.1f %s", WaveDisp(m.waveHeightM), WaveUnit());
+        c.setTextSize(2); CenterText(c, wv, 226, fg);
+    }
+    c.setTextSize(1);
+    CenterText(c, fromStation ? "NOAA station gauge" : "Open-Meteo model", SCREEN_SIZE - 34, faint);
+}
+
+// --------------------------------------------------------------------------------- catch log
+void AnglerManager::DrawCatchLog(BandCanvas& c)
+{
+    const float gf = GlowFactor();
+    const uint32_t fg     = angler::ScaleColor(palette.fg, gf);
+    const uint32_t dim    = angler::ScaleColor(palette.dim, gf);
+    const uint32_t faint  = angler::ScaleColor(palette.faint, gf);
+    const uint32_t accent = angler::ScaleColor(palette.accent, gf);
+
+    const time_t now = time(nullptr);
+    c.setTextSize(1);
+    CenterText(c, "CATCH LOG", 18, dim);
+
+    if (!logbook.Any()) {
+        c.setTextSize(2); CenterText(c, "no catches yet", SCREEN_SIZE_DIV_2 - 20, dim);
+        c.setTextSize(1); CenterText(c, "tap to log your first catch", SCREEN_SIZE_DIV_2 + 12, accent);
+        return;
+    }
+
+    char big[8]; snprintf(big, sizeof(big), "%u", (unsigned)logbook.Total());
+    c.setTextSize(1); CenterText(c, "TOTAL", 56, dim);
+    c.setTextSize(7); CenterText(c, big, 76, fg);
+
+    char line[40];
+    snprintf(line, sizeof(line), "today %u   best day %u", (unsigned)logbook.TodayCount(now), (unsigned)logbook.Best());
+    c.setTextSize(1); CenterText(c, line, SCREEN_SIZE_DIV_2 + 30, dim);
+    snprintf(line, sizeof(line), "%d%% during bite windows", logbook.BitePercent());
+    CenterText(c, line, SCREEN_SIZE_DIV_2 + 50, accent);
+    snprintf(line, sizeof(line), "streak %u d   last %s", (unsigned)logbook.CurrentStreak(now), LocalHM(logbook.LastCatch()).c_str());
+    CenterText(c, line, SCREEN_SIZE_DIV_2 + 70, faint);
+
+    c.setTextSize(1);
+    CenterText(c, "tap to log a catch", SCREEN_SIZE - 34, dim);
+}
+
 // --------------------------------------------------------------------------------- splash
 void AnglerManager::DrawSplash(BandCanvas& c)
 {
@@ -370,7 +647,7 @@ void AnglerManager::DrawDetailCard(BandCanvas& c)
         row("High  " + LocalHM(today.moonTransit), today.moonTransit ? fg : faint);
         row("Set   " + LocalHM(today.moonset), today.moonset ? fg : faint);
 
-    } else { // Sun
+    } else if (current == Screen::Sun) {
         c.drawRoundRect(m, m, SCREEN_SIZE - 2 * m, SCREEN_SIZE - 2 * m, 16, accent);
         c.setTextSize(2);
         row("SUN", accent); y += 6;
@@ -386,6 +663,55 @@ void AnglerManager::DrawDetailCard(BandCanvas& c)
             row(b, dim);
             row("Golden " + LocalHM(today.sunrise) + " & " + LocalHM(today.sunset - 3000), faint);
         }
+
+    } else if (current == Screen::Tides) {
+        const angler::TideData& td = feed.Tide();
+        c.drawRoundRect(m, m, SCREEN_SIZE - 2 * m, SCREEN_SIZE - 2 * m, 16, fg);
+        c.setTextSize(2); row("TIDES", fg); y += 6;
+        int shown = 0;
+        for (const angler::TideEvent& e : td.events) {
+            if (e.t < now - 3600) continue;
+            char b[40];
+            snprintf(b, sizeof(b), "%s  %s  %.1f %s", e.high ? "High" : "Low ", LocalHM(e.t).c_str(), e.height, WaveUnit());
+            row(b, e.high ? accent : dim);
+            if (++shown >= 6) break;
+        }
+        if (feed.HaveWaterTemp()) { char b[24]; snprintf(b, sizeof(b), "Water %.0f%s", feed.WaterTemp(), TempUnit()); row(b, fg); }
+
+    } else if (current == Screen::Barometer) {
+        const angler::WeatherData& w = feed.Weather();
+        const BaroTrend bt = ComputeBaro();
+        c.drawRoundRect(m, m, SCREEN_SIZE - 2 * m, SCREEN_SIZE - 2 * m, 16, accent);
+        c.setTextSize(2); row("BAROMETER", accent); y += 6;
+        char b[28];
+        if (imperial) snprintf(b, sizeof(b), "%.2f %s", PressDisp(w.pressureHpa), PressUnit());
+        else          snprintf(b, sizeof(b), "%.0f %s", PressDisp(w.pressureHpa), PressUnit());
+        row(b, fg);
+        if (bt.valid) {
+            snprintf(b, sizeof(b), "%+.1f hPa/h", bt.rateHpaPerH); row(b, dim);
+            row(bt.rateHpaPerH <= -0.2f ? "falling - fish feeding" : bt.rateHpaPerH >= 0.2f ? "rising - bite may slow" : "steady", dim);
+            snprintf(b, sizeof(b), "6h ago %.0f hPa", bt.pastHpa); row(b, faint);
+        }
+
+    } else if (current == Screen::Wind) {
+        const angler::WeatherData& w = feed.Weather();
+        c.drawRoundRect(m, m, SCREEN_SIZE - 2 * m, SCREEN_SIZE - 2 * m, 16, fg);
+        c.setTextSize(2); row("WIND", fg); y += 6;
+        char b[40];
+        snprintf(b, sizeof(b), "%d %s from %s", (int)lround(w.windSpeed), WindUnit(), CompassPoint(w.windDir));
+        row(b, fg);
+        snprintf(b, sizeof(b), "gust %d %s", (int)lround(w.windGust), WindUnit()); row(b, dim);
+        snprintf(b, sizeof(b), "air %.0f%s   cloud %d%%", w.airTemp, TempUnit(), w.cloud); row(b, dim);
+        row(WmoText(w.weatherCode), faint);
+
+    } else if (current == Screen::Water) {
+        const angler::MarineData& mr = feed.Marine();
+        c.drawRoundRect(m, m, SCREEN_SIZE - 2 * m, SCREEN_SIZE - 2 * m, 16, accent);
+        c.setTextSize(2); row("WATER", accent); y += 6;
+        char b[32];
+        if (feed.HaveWaterTemp())        { snprintf(b, sizeof(b), "Temp %.0f%s (station)", feed.WaterTemp(), TempUnit()); row(b, fg); }
+        else if (mr.valid && mr.haveSst) { snprintf(b, sizeof(b), "Temp %.0f%s (model)", SeaTempDisp(mr.seaTempC), TempUnit()); row(b, fg); }
+        if (mr.valid && mr.haveWave)     { snprintf(b, sizeof(b), "Waves %.1f %s", WaveDisp(mr.waveHeightM), WaveUnit()); row(b, dim); }
     }
 
     c.setTextSize(1);
